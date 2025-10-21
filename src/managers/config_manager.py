@@ -278,15 +278,13 @@ MAX_VIDEOS_PER_CHANNEL=5
                 if channels_end < len(lines):
                     new_lines.extend(lines[channels_end:])
 
-                # Write atomically (write to temp file, then rename)
-                temp_path = f"{self.config_path}.tmp"
-                with open(temp_path, 'w', encoding='utf-8') as f:
+                # Write directly to config (we're already inside lock, so safe)
+                # Note: Using direct write instead of temp+rename because Docker
+                # bind mounts can cause "Device or resource busy" errors with os.replace()
+                with open(self.config_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
-                    f.flush()  # Flush to OS buffer
-                    os.fsync(f.fileno())  # Force write to disk
-
-                # Atomic rename (now safe since file is fully written)
-                os.replace(temp_path, self.config_path)
+                    f.flush()
+                    os.fsync(f.fileno())
 
                 return True
 
@@ -398,14 +396,11 @@ MAX_VIDEOS_PER_CHANNEL=5
                 if prompt_end < len(lines):
                     new_lines.extend(lines[prompt_end:])
 
-                # Write atomically
-                temp_path = f"{self.config_path}.tmp"
-                with open(temp_path, 'w', encoding='utf-8') as f:
+                # Write directly (we're inside lock, safe from concurrent access)
+                with open(self.config_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
                     f.flush()
                     os.fsync(f.fileno())
-
-                os.replace(temp_path, self.config_path)
                 return True
 
         except Exception as e:
@@ -468,12 +463,11 @@ Transcript: {transcript}"""
                 if not setting_found and settings_start >= 0:
                     lines.insert(settings_end, f"{key}={value}\n")
 
-                # Write atomically
-                temp_path = f"{self.config_path}.tmp"
-                with open(temp_path, 'w', encoding='utf-8') as f:
+                # Write directly (we're inside lock, safe from concurrent access)
+                with open(self.config_path, 'w', encoding='utf-8') as f:
                     f.writelines(lines)
-
-                os.replace(temp_path, self.config_path)
+                    f.flush()
+                    os.fsync(f.fileno())
                 return True
 
         except Exception as e:
@@ -538,14 +532,11 @@ Transcript: {transcript}"""
                     new_lines.append('\n')
                     new_lines.extend(lines[settings_end:])
 
-                # Write atomically
-                temp_path = f"{self.config_path}.tmp"
-                with open(temp_path, 'w', encoding='utf-8') as f:
+                # Write directly (we're inside lock, safe from concurrent access)
+                with open(self.config_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
                     f.flush()
                     os.fsync(f.fileno())
-
-                os.replace(temp_path, self.config_path)
                 return True
 
         except Exception as e:

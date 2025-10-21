@@ -61,6 +61,14 @@ That's it. The script handles everything:
 
 ---
 
+## Docker Note
+
+**Pre-built Docker images are not currently available.** You'll need to build the containers locally on your machine. The install script handles this automatically - it downloads the code and builds the images for you.
+
+Pre-built images may be available in the future, but for now, the build process is handled during installation.
+
+---
+
 ## Usage
 
 ### Add Your First Channel
