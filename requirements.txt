@@ -1,0 +1,23 @@
+# YouTube Summarizer - Python Dependencies
+# =========================================
+
+# Core dependencies
+feedparser==6.0.11          # RSS feed parsing (fallback)
+yt-dlp>=2024.10.7           # Robust YouTube data extraction (videos, metadata, transcripts)
+openai>=1.54.0              # OpenAI GPT API client
+
+# Web framework
+fastapi==0.115.5            # Modern web framework
+uvicorn[standard]==0.32.1   # ASGI server with WebSockets support
+pydantic==2.10.3            # Data validation
+jinja2==3.1.6               # Template engine for web UI
+python-multipart>=0.0.6     # Required for file upload endpoints
+
+# Utilities
+filelock==3.16.1            # Cross-platform file locking
+python-dotenv==1.0.1        # Environment variable management (optional)
+apscheduler>=3.10.0         # Background task scheduling
+
+# Production dependencies (optional but recommended)
+# gunicorn==23.0.0          # Production WSGI server (alternative to uvicorn)
+# sentry-sdk==2.18.0        # Error tracking and monitoring

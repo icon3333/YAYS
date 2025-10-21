@@ -1,0 +1,71 @@
+# YouTube Summarizer - Systemd Service File
+# ==========================================
+# This service ensures YouTube Summarizer starts automatically on boot
+# and manages the Docker containers through systemd.
+#
+# Installation Instructions:
+# --------------------------
+# 1. Edit this file and replace YOUR_USERNAME with your actual username
+# 2. Copy to systemd directory:
+#    sudo cp youtube-summarizer.service /etc/systemd/system/
+# 3. Reload systemd:
+#    sudo systemctl daemon-reload
+# 4. Enable auto-start:
+#    sudo systemctl enable youtube-summarizer
+# 5. Start the service:
+#    sudo systemctl start youtube-summarizer
+# 6. Check status:
+#    sudo systemctl status youtube-summarizer
+#
+# Management Commands:
+# --------------------
+# Start:    sudo systemctl start youtube-summarizer
+# Stop:     sudo systemctl stop youtube-summarizer
+# Restart:  sudo systemctl restart youtube-summarizer
+# Status:   sudo systemctl status youtube-summarizer
+# Logs:     sudo journalctl -u youtube-summarizer -f
+# Disable:  sudo systemctl disable youtube-summarizer
+
+[Unit]
+Description=YouTube Summarizer - AI-powered video summarization service
+Documentation=https://github.com/YOUR_USERNAME/youtube-summarizer
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# IMPORTANT: Replace YOUR_USERNAME with your actual username
+WorkingDirectory=/home/YOUR_USERNAME/youtube-summarizer
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+
+# Start command
+ExecStart=/usr/bin/docker-compose up -d
+
+# Stop command
+ExecStop=/usr/bin/docker-compose down
+
+# Reload command (for config changes)
+ExecReload=/usr/bin/docker-compose restart
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=youtube-summarizer
+
+[Install]
+WantedBy=multi-user.target

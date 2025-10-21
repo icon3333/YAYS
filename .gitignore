@@ -1,0 +1,83 @@
+# YouTube Summarizer - Git Ignore File
+# ======================================
+
+# Environment and secrets
+.env
+.env.backup
+*.env
+!.env.example
+
+# Configuration (contains personal channel list)
+config.txt
+config.txt.backup
+!config.txt.example
+*.lock
+
+# AI assistant instructions (not for end users)
+.claude.md
+claude.md
+
+# Data and logs
+data/
+logs/
+*.log
+
+# Backups (created by deploy.sh)
+.backups/
+backup_*/
+*.tar.gz
+*.backup.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+*.pid
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Temporary files
+*.tmp
+*.bak
+test_*
+
+# Claude Code settings (contains user permissions/preferences)
+.claude/

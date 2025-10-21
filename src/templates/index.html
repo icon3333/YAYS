@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>YAYS - Yet Another Youtube Summarizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+    <!-- Header with Tabs -->
+    <header>
+        <h1>YAYS - Yet Another Youtube Summarizer</h1>
+        <nav class="tabs">
+            <button class="tab-btn active" onclick="showTab('channels')">Channels</button>
+            <button class="tab-btn" onclick="showTab('feed')">Feed</button>
+            <button class="tab-btn" onclick="showTab('settings')">Settings</button>
+            <button class="tab-btn" onclick="showTab('ai')">AI</button>
+        </nav>
+    </header>
+
+    <!-- TAB 1: CHANNELS -->
+    <div id="tab-channels" class="tab-content active">
+        <div class="settings-container">
+            <div id="status" class="status"></div>
+
+            <!-- Add Channel Section -->
+            <div class="settings-section">
+                <h3>➕ Add Channel</h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">Channel ID or URL</label>
+                    <input
+                        type="text"
+                        id="channelId"
+                        class="setting-input"
+                        placeholder="UCddiUEpeqJcYeBxX1IVBKvQ"
+                        autocomplete="off"
+                        autocapitalize="off"
+                        autocorrect="off"
+                    />
+                    <div class="setting-description">
+                        Paste YouTube channel URL or ID (name will be auto-fetched)
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Display Name (Optional)</label>
+                    <input
+                        type="text"
+                        id="channelName"
+                        class="setting-input"
+                        placeholder="The Verge"
+                        autocomplete="off"
+                        maxlength="100"
+                    />
+                    <div class="setting-description">
+                        Leave blank to automatically fetch from YouTube
+                    </div>
+                </div>
+
+                <button id="addBtn" onclick="addChannel()" style="width: 100%; padding: 16px; font-size: 15px;">
+                    Add Channel
+                </button>
+            </div>
+
+            <!-- Active Channels Section -->
+            <div class="settings-section" id="channelsSection">
+                <h3>📺 Active Channels (<span id="count">0</span>)</h3>
+
+                <div id="loading" class="loading">Loading channels...</div>
+
+                <div id="empty" class="empty" style="display: none;">
+                    <div class="empty-icon">—</div>
+                    <p class="empty-text">No channels configured</p>
+                </div>
+
+                <div id="channels" class="channels-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2: FEED -->
+    <div id="tab-feed" class="tab-content">
+        <div class="settings-container">
+            <!-- Processed Videos Feed Section -->
+            <div class="settings-section" id="feedSection">
+                <h3>🎬 Processed Videos (<span id="feedCount">0</span>)</h3>
+
+                <!-- Feed Controls -->
+                <div class="feed-controls">
+                    <div class="feed-filters">
+                        <select id="feedChannelFilter" class="setting-input" style="width: 200px;" onchange="filterFeed()">
+                            <option value="">All Channels</option>
+                        </select>
+
+                        <select id="feedSortOrder" class="setting-input" style="width: 150px;" onchange="filterFeed()">
+                            <option value="recent">Most Recent</option>
+                            <option value="oldest">Oldest First</option>
+                            <option value="channel">By Channel</option>
+                        </select>
+                    </div>
+
+                    <button class="btn-secondary btn-check-now" onclick="checkNow()">
+                        Check for New Videos
+                    </button>
+                </div>
+
+                <div id="feedEmpty" class="empty" style="display: none;">
+                    <div class="empty-icon">—</div>
+                    <p class="empty-text">No videos processed yet</p>
+                </div>
+
+                <div id="videoFeed" class="video-feed"></div>
+
+                <button id="loadMoreBtn" class="btn-secondary" style="width: 100%; display: none;" onclick="loadMoreVideos()">
+                    Load More (<span id="remainingCount">0</span> remaining)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: SETTINGS -->
+    <div id="tab-settings" class="tab-content">
+        <div class="settings-container">
+            <!-- Email Configuration Section -->
+            <div class="settings-section">
+                <h3>📧 Email Configuration <span id="unsaved-email" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">Target Email</label>
+                    <input type="email" id="INOREADER_EMAIL" class="setting-input trackable-input" data-section="email">
+                    <div class="setting-description">Email-to-tag address for receiving summaries</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Gmail SMTP User</label>
+                    <input type="email" id="SMTP_USER" class="setting-input trackable-input" data-section="email">
+                    <div class="setting-description">Your Gmail address</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Gmail App Password</label>
+                    <input type="password" id="SMTP_PASS" class="setting-input trackable-input" data-section="email" placeholder="16-character app password">
+                    <div class="setting-description">16-character app password - <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color: var(--black); text-decoration: underline;">Create Gmail App Password</a></div>
+                    <button class="btn-test" onclick="testSmtpCredentials()">Test SMTP Connection</button>
+                    <div id="smtp-test-result"></div>
+                </div>
+            </div>
+
+            <!-- Application Settings -->
+            <div class="settings-section">
+                <h3>⚙️ Application Settings <span id="unsaved-app" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">Log Level</label>
+                    <select id="LOG_LEVEL" class="setting-input trackable-input" data-section="app">
+                        <option value="DEBUG">DEBUG</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARNING">WARNING</option>
+                        <option value="ERROR">ERROR</option>
+                    </select>
+                    <div class="setting-description">Logging verbosity (requires restart)</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Check Interval (hours)</label>
+                    <input type="number" id="CHECK_INTERVAL_HOURS" class="setting-input trackable-input" data-section="app" min="1" max="24">
+                    <div class="setting-description">How often to check for new videos (requires restart)</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Max Processed Videos</label>
+                    <input type="number" id="MAX_PROCESSED_ENTRIES" class="setting-input trackable-input" data-section="app" min="100" max="100000">
+                    <div class="setting-description">Video history limit before rotation (requires restart)</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Send Email Summaries</label>
+                    <select id="SEND_EMAIL_TO_INOREADER" class="setting-input trackable-input" data-section="app">
+                        <option value="true">Enabled (Send to Inoreader)</option>
+                        <option value="false">Disabled (Save only)</option>
+                    </select>
+                    <div class="setting-description">When enabled, summaries are sent via email to Inoreader (requires restart)</div>
+                </div>
+            </div>
+
+            <!-- Video Processing Settings -->
+            <div class="settings-section">
+                <h3>📹 Video Processing <span id="unsaved-video" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+
+                <div class="setting-row">
+                    <div class="checkbox-row">
+                        <input type="checkbox" id="USE_SUMMARY_LENGTH" class="trackable-input" data-section="video" onchange="toggleSummaryLengthInput()">
+                        <label for="USE_SUMMARY_LENGTH" class="setting-label">Limit Summary Length</label>
+                    </div>
+                    <div class="setting-description">Enable to set a maximum token limit for summaries</div>
+                </div>
+
+                <div class="setting-row" id="summaryLengthRow">
+                    <label class="setting-label">Summary Length (tokens)</label>
+                    <input type="number" id="SUMMARY_LENGTH" class="setting-input trackable-input" data-section="video" min="100" max="2000">
+                    <div class="setting-description">Maximum summary length (affects cost)</div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="checkbox-row">
+                        <input type="checkbox" id="SKIP_SHORTS" class="trackable-input" data-section="video">
+                        <label for="SKIP_SHORTS" class="setting-label">Skip YouTube Shorts</label>
+                    </div>
+                    <div class="setting-description">Ignore videos shorter than 60 seconds</div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">Max Videos Per Channel</label>
+                    <input type="number" id="MAX_VIDEOS_PER_CHANNEL" class="setting-input trackable-input" data-section="video" min="1" max="20">
+                    <div class="setting-description">Maximum videos to check per channel per cycle</div>
+                </div>
+            </div>
+
+            <!-- Status Message -->
+            <div id="settingsStatus" class="status"></div>
+
+            <!-- Restart Notification -->
+            <div id="restartNotification" class="restart-notification" style="display: none;">
+                Settings updated. Restart Docker containers to apply changes.
+                <button onclick="restartApplication()" class="btn-restart-inline">Restart Now</button>
+            </div>
+
+            <!-- Save Button -->
+            <button onclick="saveAllSettings()" style="width: 100%; padding: 16px; font-size: 15px;">
+                Save Settings
+            </button>
+
+            <!-- Backup & Restore Section -->
+            <div class="settings-section" style="margin-top: 40px;">
+                <h3>💾 Backup & Restore</h3>
+                <div class="setting-description" style="margin-bottom: 20px;">
+                    Export your data for backup or migration. Import previously exported files to restore your configuration.
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 20px;">
+                    <!-- Export Column -->
+                    <div>
+                        <h4 style="margin-bottom: 15px; font-size: 16px;">Export</h4>
+                        <div class="setting-description" style="margin-bottom: 15px;">
+                            Choose export level and format:
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            <button onclick="exportFeed('json')" class="btn-export" style="width: 100%; text-align: left; padding: 12px 16px;">
+                                <div style="font-weight: bold;">Export Feed (JSON)</div>
+                                <div style="font-size: 12px; color: #888; margin-top: 4px;">Channels + videos with summaries</div>
+                            </button>
+
+                            <button onclick="exportFeed('csv')" class="btn-export" style="width: 100%; text-align: left; padding: 12px 16px;">
+                                <div style="font-weight: bold;">Export Videos (CSV)</div>
+                                <div style="font-size: 12px; color: #888; margin-top: 4px;">Videos only, for spreadsheet analysis</div>
+                            </button>
+
+                            <button onclick="exportBackup()" class="btn-export" style="width: 100%; text-align: left; padding: 12px 16px;">
+                                <div style="font-weight: bold;">Export Complete Backup (JSON)</div>
+                                <div style="font-size: 12px; color: #888; margin-top: 4px;">Channels + videos + settings + AI prompt</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Import Column -->
+                    <div>
+                        <h4 style="margin-bottom: 15px; font-size: 16px;">Import</h4>
+                        <div class="setting-description" style="margin-bottom: 15px;">
+                            Drag and drop JSON file, or click to browse:
+                        </div>
+
+                        <!-- Dropzone -->
+                        <div id="importDropzone" class="import-dropzone">
+                            <div id="dropzoneDefault" class="dropzone-content">
+                                <div style="font-size: 24px; margin-bottom: 10px;">📁</div>
+                                <div>Drop JSON file here</div>
+                                <div style="font-size: 12px; color: #666; margin-top: 8px;">or click below</div>
+                            </div>
+                            <div id="dropzoneFile" class="dropzone-content" style="display: none;">
+                                <div id="dropzoneFileName" style="font-weight: bold; margin-bottom: 8px;"></div>
+                                <div id="dropzoneValidating" style="font-size: 14px; color: #888;">Validating...</div>
+                            </div>
+                        </div>
+
+                        <input type="file" id="importFileInput" accept=".json" style="display: none;" onchange="handleFileSelect(event)">
+                        <button onclick="document.getElementById('importFileInput').click()" class="btn-secondary" style="width: 100%; margin-top: 12px;">
+                            Browse Files
+                        </button>
+
+                        <!-- Validation Preview -->
+                        <div id="validationPreview" class="validation-preview" style="display: none; margin-top: 16px;">
+                            <div id="validationContent"></div>
+                        </div>
+
+                        <!-- Import Buttons -->
+                        <div style="display: flex; gap: 8px; margin-top: 12px;">
+                            <button id="importButton" onclick="executeImport()" disabled class="btn-import" style="flex: 1;">
+                                Import
+                            </button>
+                            <button onclick="cancelImport()" class="btn-secondary" style="flex: 1;">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Danger Zone Section (Separate) -->
+            <div class="settings-section" style="margin-top: 40px; border: 2px solid #ff4444;">
+                <h3 style="color: #ff4444; cursor: pointer; user-select: none;" onclick="toggleDangerZone()">
+                    <span id="dangerZoneToggle">▶</span> ⚠️ Danger Zone
+                </h3>
+
+                <div id="dangerZoneContent" style="display: none;">
+                    <div class="setting-row">
+                        <button onclick="promptResetSettings()" class="btn-danger" style="width: 100%;">
+                            Reset Settings
+                        </button>
+                        <div class="setting-description" style="color: #888;">
+                            Resets all settings and AI prompt to defaults. Channels and feed history will be preserved.
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <button onclick="promptResetFeedHistory()" class="btn-danger" style="width: 100%;">
+                            Reset Feed History
+                        </button>
+                        <div class="setting-description" style="color: #888;">
+                            Deletes all processed videos from the feed. Channels and settings will be preserved.
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <button onclick="promptResetYoutubeData()" class="btn-danger" style="width: 100%;">
+                            Reset YouTube Data
+                        </button>
+                        <div class="setting-description" style="color: #888;">
+                            Deletes all channels and feed history. Settings and prompts will be preserved.
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <button onclick="promptResetCompleteApp()" class="btn-danger" style="width: 100%;">
+                            Reset Complete App
+                        </button>
+                        <div class="setting-description" style="color: #888;">
+                            Deletes all data: channels, feed history, and resets all settings and prompts to defaults.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 4: AI -->
+    <div id="tab-ai" class="tab-content">
+        <div class="settings-container">
+            <div id="aiStatus" class="status"></div>
+
+            <!-- AI Credentials Section -->
+            <div class="settings-section">
+                <h3>🔑 AI Credentials <span id="unsaved-ai-credentials" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">OpenAI API Key</label>
+                    <input type="password" id="OPENAI_API_KEY" class="setting-input trackable-input" data-section="ai-credentials" placeholder="sk-...">
+                    <div class="setting-description">Get from: https://platform.openai.com/api-keys</div>
+                    <button class="btn-test" onclick="testOpenAIKey()">Test OpenAI API</button>
+                    <div id="openai-test-result"></div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">OpenAI Model</label>
+                    <select id="OPENAI_MODEL" class="setting-input trackable-input" data-section="ai-credentials">
+                        <option value="">Loading models...</option>
+                    </select>
+                    <div class="setting-description">Model used for generating summaries</div>
+                </div>
+            </div>
+
+            <!-- AI Prompt Template Section -->
+            <div class="settings-section">
+                <h3>✏️ AI Prompt Template</h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">Prompt</label>
+                    <textarea id="promptEditor" class="prompt-editor"></textarea>
+                    <div class="setting-description">
+                        Available variables: {title}, {duration}, {transcript}
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn-secondary" onclick="resetPrompt()">Reset to Default</button>
+                    <button onclick="savePrompt()">Save Prompt</button>
+                </div>
+            </div>
+
+            <!-- Status Message for AI Settings -->
+            <div id="aiSettingsStatus" class="status"></div>
+
+            <!-- Save AI Credentials Button -->
+            <button onclick="saveAICredentials()" style="width: 100%; padding: 16px; font-size: 15px; margin-top: 20px;">
+                Save AI Settings
+            </button>
+        </div>
+    </div>
+
+    <!-- Modal for confirmations -->
+    <!-- Confirmation Modal -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <h3 class="modal-title" id="modalTitle">Remove Channel</h3>
+            <p class="modal-message" id="modalMessage"></p>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="modal-btn modal-btn-confirm" id="modalConfirmBtn" onclick="confirmRemove()">Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Modal -->
+    <div id="summaryModal" class="modal">
+        <div class="modal-content modal-summary">
+            <div class="modal-header-summary">
+                <h2 id="summaryTitle" class="summary-modal-title"></h2>
+                <button class="modal-close" onclick="closeSummaryModal()">&times;</button>
+            </div>
+            <div class="modal-body-summary">
+                <div class="summary-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">Channel:</span>
+                        <span id="summaryChannel" class="meta-value"></span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Duration:</span>
+                        <span id="summaryDuration" class="meta-value"></span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Views:</span>
+                        <span id="summaryViews" class="meta-value"></span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Uploaded:</span>
+                        <span id="summaryUploadDate" class="meta-value"></span>
+                    </div>
+                </div>
+                <div class="summary-text" id="summaryText"></div>
+            </div>
+            <div class="modal-footer-summary">
+                <a id="summaryYoutubeLink" href="" target="_blank" class="btn-primary btn-youtube">
+                    Watch on YouTube →
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

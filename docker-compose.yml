@@ -1,0 +1,109 @@
+# Remove obsolete version field
+# version: '3.8'
+
+# YouTube Summarizer - Production Docker Compose Configuration
+# ==============================================================
+
+services:
+  # Web UI service
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    container_name: youtube-web
+    restart: always
+    ports:
+      - "8015:8000"
+    volumes:
+      # Shared config (read/write with locking)
+      - ./config.txt:/app/config.txt
+      # Logs directory (persistent)
+      - ./logs:/app/logs
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - youtube-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Summarizer service
+  summarizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: summarizer
+    container_name: youtube-summarizer
+    restart: always
+    volumes:
+      # Shared config (read-only for safety, but can still read)
+      - ./config.txt:/app/config.txt
+      # Data directory (persistent, stores processed videos)
+      - ./data:/app/data
+      # Logs directory (persistent)
+      - ./logs:/app/logs
+    environment:
+      # Required credentials (configure in web UI Settings tab)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - TARGET_EMAIL=${TARGET_EMAIL:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      # Optional settings
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-14400}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_PROCESSED_ENTRIES=${MAX_PROCESSED_ENTRIES:-10000}
+    networks:
+      - youtube-net
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.2'
+          memory: 128M
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Custom network for service isolation
+networks:
+  youtube-net:
+    driver: bridge
+
+# Named volumes (optional, currently using bind mounts)
+# volumes:
+#   data:
+#   logs:

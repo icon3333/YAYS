@@ -1,0 +1,740 @@
+#!/usr/bin/env python3
+"""
+SQLite Database Manager for YouTube Summarizer
+Tracks processed videos with metadata for stats and feed
+"""
+
+import sqlite3
+import os
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, timedelta
+from contextlib import contextmanager
+
+
+class VideoDatabase:
+    """SQLite database for tracking processed videos"""
+
+    def __init__(self, db_path='data/videos.db'):
+        self.db_path = db_path
+
+        # Ensure data directory exists
+        os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
+
+        # Initialize database
+        self._init_db()
+
+    @contextmanager
+    def _get_connection(self):
+        """Context manager for database connections"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row  # Enable dict-like access
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        """Initialize database schema"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Videos table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS videos (
+                    id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    channel_name TEXT,
+                    title TEXT NOT NULL,
+                    duration_seconds INTEGER,
+                    view_count INTEGER,
+                    upload_date TEXT,
+                    processed_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    summary_length INTEGER,
+                    summary_text TEXT,
+                    processing_status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    email_sent BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create indexes for faster queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_channel_id
+                ON videos(channel_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_processed_date
+                ON videos(processed_date DESC)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_processing_status
+                ON videos(processing_status)
+            """)
+
+            conn.commit()
+
+    def is_processed(self, video_id: str) -> bool:
+        """Check if video has been processed"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,))
+            return cursor.fetchone() is not None
+
+    def add_video(
+        self,
+        video_id: str,
+        channel_id: str,
+        title: str,
+        channel_name: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+        view_count: Optional[int] = None,
+        upload_date: Optional[str] = None,
+        summary_length: Optional[int] = None,
+        summary_text: Optional[str] = None,
+        processing_status: str = 'pending',
+        error_message: Optional[str] = None,
+        email_sent: bool = False
+    ) -> bool:
+        """
+        Add a video to the database
+        Returns True if added, False if already exists
+        """
+        if self.is_processed(video_id):
+            return False
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO videos
+                (id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
+                 summary_length, summary_text, processing_status, error_message, email_sent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (video_id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
+                  summary_length, summary_text, processing_status, error_message, int(email_sent)))
+
+        return True
+
+    def get_channel_stats(self, channel_id: str) -> Dict:
+        """
+        Get statistics for a specific channel
+        Returns: {
+            'total_videos': int,
+            'total_duration_seconds': int,
+            'hours_saved': float,
+            'last_processed': datetime
+        }
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_videos,
+                    SUM(duration_seconds) as total_duration,
+                    MAX(processed_date) as last_processed
+                FROM videos
+                WHERE channel_id = ?
+            """, (channel_id,))
+
+            row = cursor.fetchone()
+
+            total_videos = row['total_videos'] or 0
+            total_duration = row['total_duration'] or 0
+
+            # Calculate total hours of video content
+            total_hours = total_duration / 3600 if total_duration else 0
+
+            return {
+                'total_videos': total_videos,
+                'total_duration_seconds': total_duration,
+                'hours_saved': round(total_hours, 1),
+                'last_processed': row['last_processed']
+            }
+
+    def get_all_channel_stats(self) -> Dict[str, Dict]:
+        """
+        Get statistics for all channels
+        Returns: {channel_id: {stats}}
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    channel_id,
+                    COUNT(*) as total_videos,
+                    SUM(duration_seconds) as total_duration,
+                    MAX(processed_date) as last_processed
+                FROM videos
+                GROUP BY channel_id
+            """)
+
+            stats = {}
+            for row in cursor.fetchall():
+                channel_id = row['channel_id']
+                total_duration = row['total_duration'] or 0
+                total_hours = total_duration / 3600 if total_duration else 0
+
+                stats[channel_id] = {
+                    'total_videos': row['total_videos'],
+                    'total_duration_seconds': total_duration,
+                    'hours_saved': round(total_hours, 1),
+                    'last_processed': row['last_processed']
+                }
+
+            return stats
+
+    def get_processed_videos(
+        self,
+        channel_id: Optional[str] = None,
+        limit: int = 25,
+        offset: int = 0,
+        order_by: str = 'recent'  # 'recent', 'oldest', 'channel'
+    ) -> List[Dict]:
+        """
+        Get list of processed videos with pagination
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build query
+            query = """
+                SELECT
+                    id,
+                    channel_id,
+                    channel_name,
+                    title,
+                    duration_seconds,
+                    view_count,
+                    upload_date,
+                    processed_date,
+                    processing_status,
+                    error_message,
+                    email_sent
+                FROM videos
+            """
+
+            params = []
+
+            # Filter by channel if specified
+            if channel_id:
+                query += " WHERE channel_id = ?"
+                params.append(channel_id)
+
+            # Order by
+            if order_by == 'recent':
+                # Sort by upload_date (newest first), with NULL values last
+                # SQLite: use CASE to put NULLs at the end
+                query += " ORDER BY CASE WHEN upload_date IS NULL THEN 1 ELSE 0 END, upload_date DESC, processed_date DESC"
+            elif order_by == 'oldest':
+                # Sort by upload_date (oldest first), with NULL values last
+                query += " ORDER BY CASE WHEN upload_date IS NULL THEN 1 ELSE 0 END, upload_date ASC, processed_date ASC"
+            elif order_by == 'channel':
+                query += " ORDER BY channel_name, CASE WHEN upload_date IS NULL THEN 1 ELSE 0 END, upload_date DESC"
+
+            # Pagination
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+
+            videos = []
+            for row in cursor.fetchall():
+                videos.append({
+                    'id': row['id'],
+                    'channel_id': row['channel_id'],
+                    'channel_name': row['channel_name'] or row['channel_id'],
+                    'title': row['title'],
+                    'duration_seconds': row['duration_seconds'],
+                    'duration_formatted': self._format_duration(row['duration_seconds']),
+                    'view_count': row['view_count'],
+                    'view_count_formatted': self._format_views(row['view_count']),
+                    'upload_date': row['upload_date'],
+                    'upload_date_formatted': self._format_upload_date(row['upload_date']),
+                    'processed_date': row['processed_date'],
+                    'processed_date_formatted': self._format_date(row['processed_date']),
+                    'processing_status': row['processing_status'],
+                    'error_message': row['error_message'],
+                    'email_sent': bool(row['email_sent'])
+                })
+
+            return videos
+
+    def get_total_count(self, channel_id: Optional[str] = None) -> int:
+        """Get total count of processed videos (for pagination)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            if channel_id:
+                cursor.execute("SELECT COUNT(*) as count FROM videos WHERE channel_id = ?", (channel_id,))
+            else:
+                cursor.execute("SELECT COUNT(*) as count FROM videos")
+
+            row = cursor.fetchone()
+            return row['count'] if row else 0
+
+    def get_global_stats(self) -> Dict:
+        """Get overall statistics across all channels"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_videos,
+                    COUNT(DISTINCT channel_id) as total_channels,
+                    SUM(duration_seconds) as total_duration
+                FROM videos
+            """)
+
+            row = cursor.fetchone()
+
+            total_duration = row['total_duration'] or 0
+            total_hours = total_duration / 3600 if total_duration else 0
+
+            return {
+                'total_videos': row['total_videos'] or 0,
+                'total_channels': row['total_channels'] or 0,
+                'total_duration_seconds': total_duration,
+                'hours_saved': round(total_hours, 1)
+            }
+
+    def migrate_from_processed_txt(self, txt_file_path: str) -> int:
+        """
+        Migrate video IDs from old processed.txt file
+        Returns number of IDs migrated
+        """
+        if not os.path.exists(txt_file_path):
+            return 0
+
+        migrated = 0
+
+        with open(txt_file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                video_id = line.strip()
+                if video_id:
+                    # Add with minimal data (no title/duration available)
+                    success = self.add_video(
+                        video_id=video_id,
+                        channel_id='unknown',
+                        title=f'Video {video_id}',
+                        channel_name='Unknown Channel'
+                    )
+                    if success:
+                        migrated += 1
+
+        return migrated
+
+    @staticmethod
+    def _format_duration(seconds: Optional[int]) -> str:
+        """Format duration in seconds to HH:MM:SS or MM:SS"""
+        if not seconds:
+            return '0:00'
+
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes}:{secs:02d}"
+
+    @staticmethod
+    def _format_views(views: Optional[int]) -> str:
+        """Format view count to human-readable string"""
+        if not views:
+            return 'Unknown views'
+
+        if views < 1000:
+            return f"{views:,} views"
+        elif views < 1_000_000:
+            return f"{views/1000:.1f}K views"
+        else:
+            return f"{views/1_000_000:.1f}M views"
+
+    @staticmethod
+    def _format_upload_date(date_str: Optional[str]) -> str:
+        """Format upload date (YYYY-MM-DD format) to human-readable format"""
+        if not date_str:
+            return 'Unknown date'
+
+        try:
+            # Handle both YYYY-MM-DD and full ISO datetime formats
+            if 'T' in date_str or ' ' in date_str:
+                dt = datetime.fromisoformat(date_str.replace(' ', 'T'))
+            else:
+                # Parse YYYY-MM-DD format
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+
+            now = datetime.now()
+            days_ago = (now.date() - dt.date()).days
+
+            # If today
+            if days_ago == 0:
+                return "Today"
+
+            # If yesterday
+            elif days_ago == 1:
+                return "Yesterday"
+
+            # If within last week
+            elif days_ago < 7:
+                return f"{days_ago} days ago"
+
+            # If within last month
+            elif days_ago < 30:
+                weeks = days_ago // 7
+                return f"{weeks} week{'s' if weeks > 1 else ''} ago"
+
+            # If within last year
+            elif days_ago < 365:
+                months = days_ago // 30
+                return f"{months} month{'s' if months > 1 else ''} ago"
+
+            # Otherwise show the date
+            else:
+                return dt.strftime('%b %d, %Y')
+
+        except:
+            return date_str
+
+    @staticmethod
+    def _format_date(date_str: Optional[str]) -> str:
+        """Format ISO date to human-readable format"""
+        if not date_str:
+            return 'Unknown'
+
+        try:
+            dt = datetime.fromisoformat(date_str)
+            now = datetime.now()
+
+            # If today
+            if dt.date() == now.date():
+                return f"Today at {dt.strftime('%H:%M')}"
+
+            # If yesterday
+            elif dt.date() == (now - timedelta(days=1)).date():
+                return f"Yesterday at {dt.strftime('%H:%M')}"
+
+            # If within last week
+            elif (now - dt).days < 7:
+                return dt.strftime('%A at %H:%M')
+
+            # Otherwise
+            else:
+                return dt.strftime('%b %d, %Y')
+
+        except:
+            return date_str
+
+    def cleanup_old_videos(self, days: int = 365, keep_minimum: int = 1000):
+        """
+        Remove videos older than specified days, keeping at least keep_minimum
+        Returns number of videos deleted
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check total count first
+            cursor.execute("SELECT COUNT(*) as count FROM videos")
+            total = cursor.fetchone()['count']
+
+            if total <= keep_minimum:
+                return 0  # Don't delete if below minimum
+
+            # Delete old videos
+            cutoff_date = datetime.now() - timedelta(days=days)
+
+            cursor.execute("""
+                DELETE FROM videos
+                WHERE processed_date < ?
+                AND id NOT IN (
+                    SELECT id FROM videos
+                    ORDER BY processed_date DESC
+                    LIMIT ?
+                )
+            """, (cutoff_date.isoformat(), keep_minimum))
+
+            deleted = cursor.rowcount
+
+            # Vacuum to reclaim space
+            cursor.execute("VACUUM")
+
+            return deleted
+
+    def update_video_processing(
+        self,
+        video_id: str,
+        status: str,
+        summary_text: Optional[str] = None,
+        error_message: Optional[str] = None,
+        email_sent: Optional[bool] = None,
+        summary_length: Optional[int] = None
+    ):
+        """
+        Update video processing status and summary
+        Used during processing to update video state
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build update query dynamically based on provided fields
+            updates = ['processing_status = ?']
+            params = [status]
+
+            if summary_text is not None:
+                updates.append('summary_text = ?')
+                params.append(summary_text)
+
+            if summary_length is not None:
+                updates.append('summary_length = ?')
+                params.append(summary_length)
+
+            if error_message is not None:
+                updates.append('error_message = ?')
+                params.append(error_message)
+
+            if email_sent is not None:
+                updates.append('email_sent = ?')
+                params.append(int(email_sent))
+
+            params.append(video_id)
+
+            cursor.execute(f"""
+                UPDATE videos
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+
+    def get_video_by_id(self, video_id: str) -> Optional[Dict]:
+        """Get full video details by ID including summary"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM videos WHERE id = ?
+            """, (video_id,))
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            return {
+                'id': row['id'],
+                'channel_id': row['channel_id'],
+                'channel_name': row['channel_name'],
+                'title': row['title'],
+                'duration_seconds': row['duration_seconds'],
+                'duration_formatted': self._format_duration(row['duration_seconds']),
+                'view_count': row['view_count'],
+                'view_count_formatted': self._format_views(row['view_count']),
+                'upload_date': row['upload_date'],
+                'upload_date_formatted': self._format_upload_date(row['upload_date']),
+                'processed_date': row['processed_date'],
+                'processed_date_formatted': self._format_date(row['processed_date']),
+                'summary_text': row['summary_text'],
+                'processing_status': row['processing_status'],
+                'error_message': row['error_message'],
+                'email_sent': bool(row['email_sent']),
+                'summary_length': row['summary_length']
+            }
+
+    def reset_video_status(self, video_id: str):
+        """Reset video processing status to pending for retry"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE videos
+                SET processing_status = 'pending',
+                    error_message = NULL
+                WHERE id = ?
+            """, (video_id,))
+
+    def reset_all_data(self):
+        """
+        Delete all videos from the database
+        Returns number of videos deleted
+        """
+        # Get count first
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM videos")
+            count = cursor.fetchone()['count']
+
+        # Delete all videos
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM videos")
+
+        # Vacuum in a separate connection (cannot be in a transaction)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("VACUUM")
+        conn.close()
+
+        return count
+
+    def export_all_videos(self) -> List[Dict]:
+        """
+        Export all videos from database for backup/export purposes.
+
+        Returns:
+            List of video dictionaries with all fields including summary_text
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    id as video_id,
+                    title,
+                    channel_id,
+                    channel_name,
+                    duration_seconds,
+                    view_count,
+                    upload_date,
+                    processing_status,
+                    summary_text,
+                    summary_length,
+                    email_sent,
+                    processed_date,
+                    error_message,
+                    created_at,
+                    created_at as updated_at
+                FROM videos
+                ORDER BY processed_date DESC
+            """)
+
+            videos = []
+            for row in cursor.fetchall():
+                videos.append({
+                    'video_id': row['video_id'],
+                    'title': row['title'],
+                    'channel_id': row['channel_id'],
+                    'channel_name': row['channel_name'] or row['channel_id'],
+                    'duration_seconds': row['duration_seconds'],
+                    'view_count': row['view_count'],
+                    'upload_date': row['upload_date'],
+                    'processing_status': row['processing_status'],
+                    'summary_text': row['summary_text'],
+                    'summary_length': row['summary_length'],
+                    'email_sent': bool(row['email_sent']),
+                    'processed_date': row['processed_date'],
+                    'error_message': row['error_message'],
+                    'created_at': row['created_at'],
+                    'updated_at': row['updated_at']
+                })
+
+            return videos
+
+    def bulk_insert_videos(self, videos: List[Dict], skip_duplicates: bool = True) -> int:
+        """
+        Bulk insert videos from import operation.
+
+        Args:
+            videos: List of video dictionaries with all fields
+            skip_duplicates: If True, skip videos that already exist (by video_id)
+
+        Returns:
+            Number of videos inserted
+
+        Raises:
+            Exception: If database error occurs (transaction will be rolled back)
+        """
+        inserted_count = 0
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            for video in videos:
+                video_id = video.get('video_id')
+
+                if not video_id:
+                    continue  # Skip videos without ID
+
+                # Check if exists (if skip_duplicates enabled)
+                if skip_duplicates:
+                    cursor.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,))
+                    if cursor.fetchone():
+                        continue  # Skip duplicate
+
+                try:
+                    cursor.execute("""
+                        INSERT INTO videos
+                        (id, channel_id, channel_name, title, duration_seconds, view_count,
+                         upload_date, summary_length, summary_text, processing_status,
+                         error_message, email_sent, processed_date, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        video_id,
+                        video.get('channel_id', ''),
+                        video.get('channel_name'),
+                        video.get('title', ''),
+                        video.get('duration_seconds'),
+                        video.get('view_count'),
+                        video.get('upload_date'),
+                        video.get('summary_length'),
+                        video.get('summary_text'),
+                        video.get('processing_status', 'pending'),
+                        video.get('error_message'),
+                        int(video.get('email_sent', False)),
+                        video.get('processed_date'),
+                        video.get('created_at', datetime.now().isoformat())
+                    ))
+                    inserted_count += 1
+
+                except sqlite3.IntegrityError as e:
+                    if skip_duplicates:
+                        continue  # Skip on constraint violation
+                    else:
+                        raise  # Re-raise if not skipping
+
+            conn.commit()
+
+        return inserted_count
+
+
+if __name__ == '__main__':
+    # Test the database
+    print("Testing VideoDatabase...")
+
+    db = VideoDatabase('test_videos.db')
+
+    # Test adding videos
+    print("\n1. Adding test videos...")
+    db.add_video('video1', 'channel1', 'How AI Works', 'Tech Channel', 600, 150)
+    db.add_video('video2', 'channel1', 'Future of AI', 'Tech Channel', 900, 200)
+    db.add_video('video3', 'channel2', 'Cooking Basics', 'Food Channel', 1200, 300)
+
+    # Test stats
+    print("\n2. Channel stats:")
+    stats = db.get_channel_stats('channel1')
+    print(f"   Channel 1: {stats}")
+
+    print("\n3. All channel stats:")
+    all_stats = db.get_all_channel_stats()
+    for channel_id, stats in all_stats.items():
+        print(f"   {channel_id}: {stats}")
+
+    print("\n4. Global stats:")
+    global_stats = db.get_global_stats()
+    print(f"   {global_stats}")
+
+    print("\n5. Processed videos feed:")
+    videos = db.get_processed_videos(limit=10)
+    for video in videos:
+        print(f"   • {video['title']} ({video['duration_formatted']})")
+        print(f"     {video['channel_name']} • {video['processed_date_formatted']}")
+
+    print("\n6. Total count:")
+    print(f"   {db.get_total_count()} videos")
+
+    # Cleanup
+    import os
+    os.remove('test_videos.db')
+
+    print("\n✅ Tests complete")
