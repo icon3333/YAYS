@@ -593,7 +593,7 @@ Transcript: {transcript}"""
         return [
             {
                 'channel_id': ch_id,
-                'channel_name': names.get(ch_id),
+                'channel_name': names.get(ch_id) if names.get(ch_id) != ch_id else None,
                 'added_date': None  # Not tracked currently
             }
             for ch_id in channels

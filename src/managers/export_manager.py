@@ -217,33 +217,13 @@ class ExportManager:
         Returns:
             List of channel dictionaries with channel_id, channel_name, added_date
         """
-        channels_list = []
-
         try:
-            # Get channels from config
-            channels_raw = self.config_manager.get_value("Channels", "CHANNELS", "")
+            # Use ConfigManager's built-in export method (single source of truth)
+            channels_list = self.config_manager.export_channels()
 
-            if not channels_raw:
+            if not channels_list:
                 logger.warning("No channels found in config")
                 return []
-
-            # Parse channels (format: "ID|Name" or "ID" per line)
-            for line in channels_raw.strip().split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-
-                parts = line.split("|", 1)
-                channel_id = parts[0].strip()
-                channel_name = parts[1].strip() if len(parts) > 1 else None
-
-                channels_list.append(
-                    {
-                        "channel_id": channel_id,
-                        "channel_name": channel_name,
-                        "added_date": None,  # Not tracked in config currently
-                    }
-                )
 
             logger.debug(f"Extracted {len(channels_list)} channels from config")
             return channels_list
