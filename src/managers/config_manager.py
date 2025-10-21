@@ -282,8 +282,10 @@ MAX_VIDEOS_PER_CHANNEL=5
                 temp_path = f"{self.config_path}.tmp"
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
+                    f.flush()  # Flush to OS buffer
+                    os.fsync(f.fileno())  # Force write to disk
 
-                # Atomic rename
+                # Atomic rename (now safe since file is fully written)
                 os.replace(temp_path, self.config_path)
 
                 return True
@@ -400,6 +402,8 @@ MAX_VIDEOS_PER_CHANNEL=5
                 temp_path = f"{self.config_path}.tmp"
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
+                    f.flush()
+                    os.fsync(f.fileno())
 
                 os.replace(temp_path, self.config_path)
                 return True
@@ -538,6 +542,8 @@ Transcript: {transcript}"""
                 temp_path = f"{self.config_path}.tmp"
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
+                    f.flush()
+                    os.fsync(f.fileno())
 
                 os.replace(temp_path, self.config_path)
                 return True

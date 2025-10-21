@@ -1828,11 +1828,15 @@ async def home():
                 const validation = await validateResponse.json();
 
                 // Show confirmation dialog
-                const message = `This will restore:\n\n` +
-                    `- ${validation.channels_count || 0} channels\n` +
-                    `- ${validation.videos_count || 0} videos\n` +
-                    `- Settings and AI prompt\n\n` +
-                    `Current data will be replaced. Continue?`;
+                const preview = validation.preview || {};
+                const totalChannels = (preview.channels_new || 0) + (preview.channels_existing || 0);
+                const totalVideos = (preview.videos_new || 0) + (preview.videos_duplicate || 0);
+
+                const message = `This will import:\n\n` +
+                    `- ${totalChannels} channels (${preview.channels_new || 0} new, ${preview.channels_existing || 0} existing)\n` +
+                    `- ${totalVideos} videos (${preview.videos_new || 0} new, ${preview.videos_duplicate || 0} duplicates)\n` +
+                    `- ${preview.settings_changed || 0} settings will be updated\n\n` +
+                    `Continue?`;
 
                 if (!confirm(message)) {
                     showSettingsStatus('Import cancelled', false);
@@ -1846,7 +1850,7 @@ async def home():
                 const importFormData = new FormData();
                 importFormData.append('file', file);
 
-                const importResponse = await fetch('/api/import/backup', {
+                const importResponse = await fetch('/api/import/execute', {
                     method: 'POST',
                     body: importFormData
                 });
@@ -1860,8 +1864,9 @@ async def home():
 
                 showSettingsStatus(
                     `Backup restored successfully! ` +
-                    `${result.channels_imported || 0} channels, ` +
-                    `${result.videos_imported || 0} videos imported.`,
+                    `${result.channels_added || 0} channels, ` +
+                    `${result.videos_added || 0} videos, ` +
+                    `${result.settings_updated || 0} settings imported.`,
                     false
                 );
 
