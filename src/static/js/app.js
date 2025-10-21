@@ -831,12 +831,12 @@
                 const settingsToSave = {};
 
                 // Get all .env settings
-                settingsToSave['INOREADER_EMAIL'] = document.getElementById('INOREADER_EMAIL').value;
+                settingsToSave['TARGET_EMAIL'] = document.getElementById('TARGET_EMAIL').value;
                 settingsToSave['SMTP_USER'] = document.getElementById('SMTP_USER').value;
                 settingsToSave['LOG_LEVEL'] = document.getElementById('LOG_LEVEL').value;
                 settingsToSave['CHECK_INTERVAL_HOURS'] = document.getElementById('CHECK_INTERVAL_HOURS').value;
                 settingsToSave['MAX_PROCESSED_ENTRIES'] = document.getElementById('MAX_PROCESSED_ENTRIES').value;
-                settingsToSave['SEND_EMAIL_TO_INOREADER'] = document.getElementById('SEND_EMAIL_TO_INOREADER').value;
+                settingsToSave['SEND_EMAIL_SUMMARIES'] = document.getElementById('SEND_EMAIL_SUMMARIES').value;
                 settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
                 // Get password fields (only save if they have values)
@@ -1170,7 +1170,7 @@ Transcript: {transcript}`;
                 let html = `<button class="btn-read-summary" onclick="showSummary('${escapeAttr(video.id)}')">Read Summary</button>`;
 
                 if (video.email_sent) {
-                    html += `<span class="status-badge success" title="Email sent to Inoreader">Email</span>`;
+                    html += `<span class="status-badge success" title="Email sent">Email</span>`;
                 } else {
                     html += `<span class="status-badge warning" title="Email pending">Email Pending</span>`;
                 }

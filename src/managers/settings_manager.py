@@ -45,11 +45,11 @@ class SettingsManager:
                 'pattern': r'^sk-[A-Za-z0-9_-]{20,}$',
                 'description': 'OpenAI API Key (for ChatGPT)'
             },
-            'INOREADER_EMAIL': {
+            'TARGET_EMAIL': {
                 'type': 'email',
                 'required': True,
                 'pattern': r'^[\w\.\-+]+@[\w\.\-]+\.\w+$',
-                'description': 'Email-to-tag address for receiving summaries'
+                'description': 'Email address for receiving summaries'
             },
             'SMTP_USER': {
                 'type': 'email',
@@ -88,12 +88,12 @@ class SettingsManager:
                 'max': 100000,
                 'description': 'Max video IDs to track before rotation'
             },
-            'SEND_EMAIL_TO_INOREADER': {
+            'SEND_EMAIL_SUMMARIES': {
                 'type': 'enum',
                 'required': False,
                 'default': 'true',
                 'options': ['true', 'false'],
-                'description': 'Send summaries via email to Inoreader'
+                'description': 'Send summaries via email'
             },
             'OPENAI_MODEL': {
                 'type': 'text',

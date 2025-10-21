@@ -17,6 +17,7 @@ from datetime import datetime
 
 from src.managers.database import VideoDatabase
 from src.managers.config_manager import ConfigManager
+from src.managers.settings_manager import SettingsManager
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,7 @@ class ImportManager:
         self,
         db_path: str = "data/videos.db",
         config_path: str = "config.txt",
+        env_path: str = ".env",
     ):
         """
         Initialize ImportManager.
@@ -111,9 +113,11 @@ class ImportManager:
         Args:
             db_path: Path to SQLite database
             config_path: Path to config.txt
+            env_path: Path to .env file
         """
         self.db = VideoDatabase(db_path)
         self.config_manager = ConfigManager(config_path)
+        self.settings_manager = SettingsManager(env_path)
 
     def validate_import_file(self, data: Dict[str, Any]) -> ValidationResult:
         """
@@ -325,16 +329,44 @@ class ImportManager:
                 try:
                     settings = data.get("settings", {})
 
-                    # Import AI prompt if present
-                    if "ai_prompt_template" in settings:
-                        prompt = settings.pop("ai_prompt_template")
-                        self.config_manager.set_prompt(prompt)
-                        settings_updated += 1
+                    # Separate config.txt settings from .env settings
+                    config_settings = {}
+                    env_settings = {}
 
-                    # Import other settings
-                    count = self.config_manager.import_settings(settings)
-                    settings_updated += count
-                    logger.info(f"Imported {settings_updated} settings")
+                    # Config.txt settings
+                    config_keys = {
+                        "SUMMARY_LENGTH", "USE_SUMMARY_LENGTH", "SKIP_SHORTS",
+                        "MAX_VIDEOS_PER_CHANNEL", "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
+                    }
+
+                    for key, value in settings.items():
+                        if key == "ai_prompt_template":
+                            # Handle AI prompt separately
+                            self.config_manager.set_prompt(value)
+                            settings_updated += 1
+                        elif key in config_keys:
+                            config_settings[key] = value
+                        else:
+                            # Everything else goes to .env
+                            env_settings[key] = value
+
+                    # Import config.txt settings
+                    if config_settings:
+                        count = self.config_manager.import_settings(config_settings)
+                        settings_updated += count
+                        logger.info(f"Imported {count} config.txt settings")
+
+                    # Import .env settings
+                    if env_settings:
+                        success, message, import_errors = self.settings_manager.update_multiple_settings(env_settings)
+                        if success:
+                            settings_updated += len(env_settings)
+                            logger.info(f"Imported {len(env_settings)} .env settings")
+                        else:
+                            logger.warning(f"Some .env settings failed: {import_errors}")
+                            # Don't fail the whole import, just log warnings
+
+                    logger.info(f"Imported total {settings_updated} settings")
 
                 except Exception as e:
                     error_msg = f"Failed to import settings: {e}"

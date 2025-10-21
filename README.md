@@ -12,7 +12,7 @@ Monitor YouTube channels → Extract transcripts → Generate AI summaries → E
 
 **Features:**
 - 🤖 AI summaries using OpenAI (GPT-4o, GPT-4o-mini, o1-mini)
-- 📧 Email delivery to inbox or RSS reader (Inoreader, The Old Reader, etc.)
+- 📧 Email delivery to inbox or RSS reader via email-to-tag
 - 📱 Web UI - Mobile-first interface
 - 🔄 Auto-processing every 4 hours
 - 💾 Import/Export - Backup your data

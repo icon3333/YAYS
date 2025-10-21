@@ -308,10 +308,7 @@ MAX_VIDEOS_PER_CHANNEL=5
     def get_channels(self) -> Tuple[List[str], Dict[str, str]]:
         """Convenience method to get just channels and names"""
         config = self.read_config()
-        channels = config['channels']
-        names = config['channel_names']
-        print(f"[DEBUG] get_channels() returning {len(channels)} channels: {channels}")
-        return channels, names
+        return config['channels'], config['channel_names']
 
     def add_channel(self, channel_id: str, channel_name: str = None) -> bool:
         """Add a single channel to the config"""

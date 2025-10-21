@@ -61,7 +61,8 @@ export_manager = ExportManager(
 )
 import_manager = ImportManager(
     db_path='data/videos.db',
-    config_path='config.txt'
+    config_path='config.txt',
+    env_path='.env'
 )
 
 
@@ -1244,8 +1245,8 @@ async def home():
 
                 <div class="setting-row">
                     <label class="setting-label">Target Email</label>
-                    <input type="email" id="INOREADER_EMAIL" class="setting-input trackable-input" data-section="credentials">
-                    <div class="setting-description">Email-to-tag address for receiving summaries</div>
+                    <input type="email" id="TARGET_EMAIL" class="setting-input trackable-input" data-section="credentials">
+                    <div class="setting-description">Email address for receiving summaries</div>
                 </div>
 
                 <div class="setting-row">
@@ -2303,7 +2304,7 @@ async def home():
                 const settingsToSave = {};
 
                 // Get all .env settings
-                settingsToSave['INOREADER_EMAIL'] = document.getElementById('INOREADER_EMAIL').value;
+                settingsToSave['TARGET_EMAIL'] = document.getElementById('TARGET_EMAIL').value;
                 settingsToSave['SMTP_USER'] = document.getElementById('SMTP_USER').value;
                 settingsToSave['LOG_LEVEL'] = document.getElementById('LOG_LEVEL').value;
                 settingsToSave['CHECK_INTERVAL_HOURS'] = document.getElementById('CHECK_INTERVAL_HOURS').value;

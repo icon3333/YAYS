@@ -38,16 +38,16 @@ class ExportManager:
     EXPORT_LEVEL_FEED = "feed"
     EXPORT_LEVEL_COMPLETE = "complete"
 
-    # Fields to exclude from settings export (security)
-    EXCLUDED_SETTINGS = {
+    # Credentials to exclude from export (security - these should NOT be exported)
+    EXCLUDED_CREDENTIALS = {
         "OPENAI_API_KEY",
         "SMTP_SERVER",
         "SMTP_PORT",
+        "SMTP_USER",
+        "SMTP_PASS",
         "SMTP_USERNAME",
         "SMTP_PASSWORD",
-        "INOREADER_EMAIL",
-        "EMAIL_ENABLED",
-        "LOG_LEVEL",
+        "TARGET_EMAIL",
     }
 
     def __init__(
@@ -250,7 +250,7 @@ class ExportManager:
 
     def _get_settings(self) -> Dict[str, Any]:
         """
-        Extract non-secret settings from ConfigManager.
+        Extract non-secret settings from both config.txt and .env.
 
         Excludes credentials for security.
 
@@ -260,8 +260,8 @@ class ExportManager:
         settings = {}
 
         try:
-            # Get application settings from config.txt
-            settings_keys = [
+            # Get video processing settings from config.txt
+            config_keys = [
                 "SUMMARY_LENGTH",
                 "USE_SUMMARY_LENGTH",
                 "SKIP_SHORTS",
@@ -270,7 +270,7 @@ class ExportManager:
                 "MAX_FEED_ENTRIES",
             ]
 
-            for key in settings_keys:
+            for key in config_keys:
                 value = self.config_manager.get_value("Settings", key, None)
                 if value is not None:
                     # Convert string booleans to actual booleans
@@ -286,7 +286,13 @@ class ExportManager:
             if ai_prompt:
                 settings["ai_prompt_template"] = ai_prompt
 
-            logger.debug(f"Extracted {len(settings)} settings from config")
+            # Get application settings from .env (exclude credentials)
+            env_settings = self.settings_manager.get_all_settings(mask_secrets=False)
+            for key, value in env_settings.items():
+                if key not in self.EXCLUDED_CREDENTIALS:
+                    settings[key] = value
+
+            logger.debug(f"Extracted {len(settings)} settings (config.txt + .env)")
             return settings
 
         except Exception as e:

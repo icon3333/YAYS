@@ -90,15 +90,15 @@ class VideoProcessor:
 
         # Load and validate environment variables
         self.openai_key = os.getenv('OPENAI_API_KEY')
-        self.inoreader_email = os.getenv('INOREADER_EMAIL')
+        self.target_email = os.getenv('TARGET_EMAIL')
         self.smtp_user = os.getenv('SMTP_USER')
         self.smtp_pass = os.getenv('SMTP_PASS')
 
         missing = []
         if not self.openai_key:
             missing.append('OPENAI_API_KEY')
-        if not self.inoreader_email:
-            missing.append('INOREADER_EMAIL')
+        if not self.target_email:
+            missing.append('TARGET_EMAIL')
         if not self.smtp_user:
             missing.append('SMTP_USER')
         if not self.smtp_pass:
@@ -113,8 +113,8 @@ class VideoProcessor:
             sys.exit(1)
 
         # Validate email format
-        if not re.match(r'^[\w\.\-+]+@[\w\.\-]+\.\w+$', self.inoreader_email):
-            self.logger.error(f"Invalid INOREADER_EMAIL format: {self.inoreader_email}")
+        if not re.match(r'^[\w\.\-+]+@[\w\.\-]+\.\w+$', self.target_email):
+            self.logger.error(f"Invalid TARGET_EMAIL format: {self.target_email}")
             sys.exit(1)
 
         # Initialize components
@@ -127,7 +127,7 @@ class VideoProcessor:
         # Get model from environment or use default
         openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
         self.summarizer = AISummarizer(self.openai_key, model=openai_model)
-        self.email_sender = EmailSender(self.smtp_user, self.smtp_pass, self.inoreader_email)
+        self.email_sender = EmailSender(self.smtp_user, self.smtp_pass, self.target_email)
 
         # Setup processed videos tracking (legacy)
         max_entries = int(os.getenv('MAX_PROCESSED_ENTRIES', '10000'))
@@ -259,13 +259,13 @@ class VideoProcessor:
         self.logger.info(f"      ✅ Summary generated ({len(summary)} chars)")
 
         # STEP 4: Optionally send email
-        send_email = os.getenv('SEND_EMAIL_TO_INOREADER', 'true').lower() == 'true'
+        send_email = os.getenv('SEND_EMAIL_SUMMARIES', 'true').lower() == 'true'
 
         if send_email:
-            if self.email_sender.email_to_inoreader(video, summary, channel_name):
+            if self.email_sender.send_email(video, summary, channel_name):
                 self.db.update_video_processing(video['id'], status='success', email_sent=True)
                 self.stats['email_sent'] += 1
-                self.logger.info(f"      📧 Email sent to Inoreader")
+                self.logger.info(f"      📧 Email sent")
             else:
                 # Email failed but summary is saved - mark as failed_email
                 self.db.update_video_processing(

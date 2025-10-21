@@ -172,7 +172,7 @@ print_success_message() {
     echo ""
     echo "   In Settings tab, add:"
     echo "   - OpenAI API key"
-    echo "   - Target email (RSS reader like Inoreader, or your inbox)"
+    echo "   - Target email (your inbox or RSS reader email-to-tag)"
     echo "   - Gmail SMTP credentials"
     echo ""
     echo -e "${YELLOW}4. Add YouTube channels and start processing!${NC}"

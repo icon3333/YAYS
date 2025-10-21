@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Email Delivery
-Handles SMTP email sending to Inoreader
+Handles SMTP email sending
 """
 
 import smtplib
@@ -15,18 +15,18 @@ logger = logging.getLogger(__name__)
 
 
 class EmailSender:
-    """SMTP email sender for Inoreader delivery"""
+    """SMTP email sender"""
 
     RETRY_ATTEMPTS = 3
     RETRY_DELAY_BASE = 5  # seconds
 
-    def __init__(self, smtp_user: str, smtp_pass: str, inoreader_email: str):
+    def __init__(self, smtp_user: str, smtp_pass: str, target_email: str):
         """Initialize with SMTP credentials"""
         self.smtp_user = smtp_user
         self.smtp_pass = smtp_pass
-        self.inoreader_email = inoreader_email
+        self.target_email = target_email
 
-    def email_to_inoreader(self, video: Dict, summary: str, channel_name: str = None) -> bool:
+    def send_email(self, video: Dict, summary: str, channel_name: str = None) -> bool:
         """
         Send summary via email with retry logic
         Returns True on success
@@ -63,7 +63,7 @@ class EmailSender:
         msg = MIMEText(email_body, 'plain', 'utf-8')
         msg['Subject'] = f"YAYS: {video['title'][:60]}"
         msg['From'] = self.smtp_user
-        msg['To'] = self.inoreader_email
+        msg['To'] = self.target_email
 
         # Try sending with retry
         for attempt in range(self.RETRY_ATTEMPTS):
