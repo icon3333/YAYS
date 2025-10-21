@@ -34,12 +34,16 @@ Monitor YouTube channels → Extract transcripts → Generate AI summaries → E
 ```bash
 curl -fsSL https://raw.githubusercontent.com/icon3333/YAYS/main/install.sh | bash
 cd ~/YAYS
-docker-compose up -d
+docker compose up -d
 ```
 
 **Default port:** 8000
 
-**To change port:** Edit `docker-compose.yml` line 16: `"8000:8000"` → `"3000:8000"` (or your port), then `docker-compose restart`
+**To change port:** Edit `docker-compose.yml` line 17: `"8000:8000"` → `"3000:8000"` (or your port), then:
+```bash
+docker compose down
+docker compose up -d
+```
 
 **Then open:** http://localhost:8000 and configure in the Settings tab.
 
@@ -103,7 +107,7 @@ Configure everything in the **Settings tab** of the web UI (http://localhost:800
 nano config.txt
 # Add under [CHANNELS]:
 # UCddiUEpeqJcYeBxX1IVBKvQ|The Verge
-docker-compose restart summarizer
+docker compose restart summarizer
 ```
 
 ### Trigger Processing
@@ -116,7 +120,7 @@ docker exec youtube-summarizer python process_videos.py
 
 Watch logs:
 ```bash
-docker-compose logs -f summarizer
+docker compose logs -f summarizer
 ```
 
 Expected output:
@@ -134,27 +138,29 @@ Check your RSS reader inbox for email: `YAYS: [Video Title]`
 
 ```bash
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Restart services (does NOT reload code)
-docker-compose restart
+docker compose restart
 
 # Manual processing
 docker exec youtube-summarizer python process_videos.py
 
 # Check status
-docker-compose ps
+docker compose ps
 
-# Update from GitHub
+# Update from GitHub (pulls latest code and rebuilds)
 git pull origin main
-docker-compose up -d --build
+docker compose down
+docker compose build --no-cache
+docker compose up -d
 
 # Backup (via web UI - Settings tab)
 # Or manual file backup:
 tar -czf backup.tar.gz config.txt data/
 
 # Stop
-docker-compose down
+docker compose down
 ```
 
 ---
@@ -165,16 +171,32 @@ docker-compose down
 
 ```bash
 cd ~/YAYS
+
+# If you have uncommitted local changes, discard them first:
+git checkout -- .
+
+# Pull latest code
 git pull origin main
-docker-compose up -d --build
+
+# Rebuild and restart (--no-cache ensures dependencies are updated)
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+
+# Verify containers are healthy
+docker compose ps
 ```
 
 **What this does:**
-1. Pulls latest code from GitHub
-2. Rebuilds Docker images with new code
-3. Restarts containers with updated code
+1. Discards any local modifications to tracked files
+2. Pulls latest code from GitHub
+3. Rebuilds Docker images from scratch (no cache)
+4. Restarts containers with updated code and dependencies
 
-**Note:** `docker-compose restart` does NOT reload code. You must use `--build` to pick up changes.
+**Important Notes:**
+- `docker compose restart` does NOT reload code
+- `docker compose up -d --build` may use cached layers and miss dependency updates
+- Always use `--no-cache` for updates to ensure fresh builds
 
 ### Backup & Restore
 
@@ -191,7 +213,7 @@ tar -czf backup-$(date +%Y%m%d).tar.gz config.txt data/
 
 # Restore
 tar -xzf backup-20241020.tar.gz
-docker-compose restart
+docker compose restart
 ```
 
 ---
@@ -243,6 +265,15 @@ sudo certbot --nginx -d youtube.yourdomain.com
 
 ### Docker Restart Policy (Already Configured)
 `docker-compose.yml` has `restart: always` - containers auto-start after reboot.
+
+Test it:
+```bash
+# Reboot server
+sudo reboot
+
+# After reboot, verify containers started
+docker compose ps
+```
 
 ### Systemd Service (Optional)
 ```bash
@@ -306,7 +337,7 @@ Most YouTube summarizers are weekend projects that break on Monday. This one:
 
 ```bash
 # Check for errors
-docker-compose logs summarizer | grep ERROR
+docker compose logs summarizer | grep ERROR
 
 # Verify credentials
 cat .env | grep -E "OPENAI|INOREADER|SMTP"
@@ -323,21 +354,21 @@ docker logs youtube-summarizer
 docker logs youtube-web
 
 # Common fix
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ### Web UI Not Loading
 
 ```bash
 # Check web container
-docker-compose ps web
+docker compose ps web
 
 # Test health
 curl http://localhost:8000/health
 
 # Restart
-docker-compose restart web
+docker compose restart web
 ```
 
 ### Port 8000 In Use
@@ -350,8 +381,8 @@ ports:
 
 Then:
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ### High Costs
@@ -381,8 +412,8 @@ ports:
 
 Start both:
 ```bash
-docker-compose -f docker-compose.yml up -d
-docker-compose -f docker-compose-dev.yml up -d
+docker compose -f docker-compose.yml up -d
+docker compose -f docker-compose-dev.yml up -d
 ```
 
 ### Cloud Backup (rclone)
@@ -412,8 +443,8 @@ echo "0 3 * * * $PWD/cloud-backup.sh" | crontab -
 curl http://localhost:8000/health
 
 # Logs
-docker-compose logs -f
-docker-compose logs --tail 50 summarizer
+docker compose logs -f
+docker compose logs --tail 50 summarizer
 
 # Resource usage
 docker stats youtube-summarizer youtube-web
