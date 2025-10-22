@@ -267,6 +267,10 @@ class ImportManager:
                 if isinstance(new_value, dict) and 'value' in new_value:
                     new_value = new_value['value']
 
+                # Skip empty values (won't be imported anyway)
+                if not new_value:
+                    continue
+
                 if key == "ai_prompt_template":
                     # Compare AI prompt
                     current_prompt = self.config_manager.get_prompt()
@@ -409,17 +413,23 @@ class ImportManager:
 
                     # Import .env settings
                     if env_settings:
-                        logger.info(f"Attempting to import {len(env_settings)} .env settings: {list(env_settings.keys())}")
-                        success, message, import_errors = self.settings_manager.update_multiple_settings(env_settings)
-                        if success:
-                            settings_updated += len(env_settings)
-                            logger.info(f"✅ Successfully imported {len(env_settings)} .env settings")
+                        # Filter out empty values (don't overwrite existing settings with empty strings)
+                        non_empty_env_settings = {k: v for k, v in env_settings.items() if v}
+
+                        if not non_empty_env_settings:
+                            logger.info("All .env settings in import are empty, skipping")
                         else:
-                            logger.warning(f"⚠️ Some .env settings failed: {message}")
-                            if import_errors:
-                                for error in import_errors:
-                                    logger.warning(f"  - {error}")
-                            # Don't fail the whole import, just log warnings
+                            logger.info(f"Attempting to import {len(non_empty_env_settings)} .env settings: {list(non_empty_env_settings.keys())}")
+                            success, message, import_errors = self.settings_manager.update_multiple_settings(non_empty_env_settings)
+                            if success:
+                                settings_updated += len(non_empty_env_settings)
+                                logger.info(f"✅ Successfully imported {len(non_empty_env_settings)} .env settings")
+                            else:
+                                logger.warning(f"⚠️ Some .env settings failed: {message}")
+                                if import_errors:
+                                    for error in import_errors:
+                                        logger.warning(f"  - {error}")
+                                # Don't fail the whole import, just log warnings
                     else:
                         logger.info("No .env settings to import")
 
