@@ -263,18 +263,23 @@ class ImportManager:
                 if key in self.EXCLUDED_CREDENTIALS:
                     continue
 
+                # Extract value if it's a dict (old malformed export format)
+                if isinstance(new_value, dict) and 'value' in new_value:
+                    new_value = new_value['value']
+
                 if key == "ai_prompt_template":
                     # Compare AI prompt
                     current_prompt = self.config_manager.get_prompt()
                     if current_prompt != new_value:
                         settings_changed += 1
-                        settings_details.append(f"AI_PROMPT: (modified)")
+                        settings_details.append(f"✏️ AI Prompt Template: (modified)")
                 else:
                     # Compare other settings
                     current_value = existing_settings.get(key)
                     if str(current_value) != str(new_value):
                         settings_changed += 1
-                        settings_details.append(f"{key}: {current_value} → {new_value}")
+                        # Show clean, minimal preview
+                        settings_details.append(f"{key}: {new_value}")
 
         # Calculate total size (rough estimate)
         import json
@@ -365,7 +370,12 @@ class ImportManager:
                             skipped_credentials.append(key)
                             logger.warning(f"Skipping credential import for security: {key}")
                         else:
-                            filtered_settings[key] = value
+                            # Extract value if it's a dict (old malformed export format compatibility)
+                            if isinstance(value, dict) and 'value' in value:
+                                logger.debug(f"Extracting value from malformed dict for key: {key}")
+                                filtered_settings[key] = value['value']
+                            else:
+                                filtered_settings[key] = value
 
                     if skipped_credentials:
                         logger.info(f"Skipped {len(skipped_credentials)} credentials for security: {skipped_credentials}")
@@ -399,13 +409,19 @@ class ImportManager:
 
                     # Import .env settings
                     if env_settings:
+                        logger.info(f"Attempting to import {len(env_settings)} .env settings: {list(env_settings.keys())}")
                         success, message, import_errors = self.settings_manager.update_multiple_settings(env_settings)
                         if success:
                             settings_updated += len(env_settings)
-                            logger.info(f"Imported {len(env_settings)} .env settings")
+                            logger.info(f"✅ Successfully imported {len(env_settings)} .env settings")
                         else:
-                            logger.warning(f"Some .env settings failed: {import_errors}")
+                            logger.warning(f"⚠️ Some .env settings failed: {message}")
+                            if import_errors:
+                                for error in import_errors:
+                                    logger.warning(f"  - {error}")
                             # Don't fail the whole import, just log warnings
+                    else:
+                        logger.info("No .env settings to import")
 
                     logger.info(f"Imported total {settings_updated} settings")
 
