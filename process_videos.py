@@ -119,10 +119,9 @@ class VideoProcessor:
 
         # Initialize components
         use_ytdlp = self.config['settings'].get('USE_YTDLP', 'true').lower() == 'true'
-        transcript_fallback = self.config['settings'].get('TRANSCRIPT_FALLBACK_YTDLP', 'true').lower() == 'true'
 
         self.youtube_client = YouTubeClient(use_ytdlp=use_ytdlp)
-        self.transcript_extractor = TranscriptExtractor(use_ytdlp_fallback=transcript_fallback)
+        self.transcript_extractor = TranscriptExtractor()
 
         # Get model from environment or use default
         openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')

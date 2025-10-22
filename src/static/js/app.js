@@ -1852,8 +1852,21 @@ Transcript: {transcript}`;
 
         // Show TOC
         function showTOC() {
-            document.getElementById('tocContainer').classList.add('show');
+            const tocContainer = document.getElementById('tocContainer');
+            tocContainer.classList.add('show');
             document.getElementById('tocToggle').classList.add('show');
+
+            // Dynamically position TOC to align with first section
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab) {
+                const firstSection = activeTab.querySelector('.settings-section');
+                if (firstSection) {
+                    const rect = firstSection.getBoundingClientRect();
+                    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                    const absoluteTop = rect.top + scrollTop;
+                    tocContainer.style.top = `${rect.top}px`;
+                }
+            }
         }
 
         // Hide TOC

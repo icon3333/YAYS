@@ -1354,10 +1354,10 @@
         /* Desktop TOC Container */
         .toc-container {
             position: fixed;
-            top: 140px;
-            right: 20px;
+            top: 150px;
+            right: calc((100vw - 800px) / 2 - 220px);
             width: 200px;
-            max-height: calc(100vh - 160px);
+            max-height: calc(100vh - 170px);
             overflow-y: auto;
             display: none;
             z-index: 1000;
@@ -1370,6 +1370,13 @@
         @media (min-width: 900px) {
             .toc-container.show {
                 display: block;
+            }
+        }
+
+        /* Adjust position for wider screens */
+        @media (min-width: 1400px) {
+            .toc-container {
+                right: calc((100vw - 800px) / 2 - 250px);
             }
         }
 
