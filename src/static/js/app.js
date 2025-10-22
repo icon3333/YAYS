@@ -1693,8 +1693,13 @@ Transcript: {transcript}`;
             // Extract section data
             const tocItems = [];
             sections.forEach((heading, index) => {
+                // Clone heading and remove unsaved indicators
+                const clone = heading.cloneNode(true);
+                const unsavedIndicators = clone.querySelectorAll('.unsaved-indicator');
+                unsavedIndicators.forEach(indicator => indicator.remove());
+
                 // Extract text and remove emojis
-                const rawText = heading.textContent || heading.innerText;
+                const rawText = clone.textContent || clone.innerText;
                 const text = rawText.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').replace(/[^\x00-\x7F]/g, '').trim();
 
                 // Generate unique ID
