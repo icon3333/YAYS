@@ -1346,3 +1346,217 @@
                 padding: 30px 15px;
             }
         }
+
+        /* ============================================================================
+           TABLE OF CONTENTS (TOC) NAVIGATION
+           ============================================================================ */
+
+        /* Desktop TOC Container */
+        .toc-container {
+            position: fixed;
+            top: 120px;
+            right: 20px;
+            width: 200px;
+            max-height: calc(100vh - 140px);
+            overflow-y: auto;
+            display: none;
+            z-index: 100;
+        }
+
+        .toc-container.show {
+            display: block;
+        }
+
+        .toc-nav {
+            background: var(--white);
+            border: 1px solid var(--grey-200);
+            padding: var(--space-2);
+        }
+
+        .toc-header {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--grey-500);
+            margin-bottom: var(--space-2);
+            padding-bottom: var(--space-1);
+            border-bottom: 1px solid var(--grey-200);
+        }
+
+        .toc-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .toc-item {
+            margin-bottom: var(--space-1);
+        }
+
+        .toc-link {
+            display: block;
+            padding: var(--space-1);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--grey-600);
+            text-decoration: none;
+            transition: all 0.2s;
+            border-left: 2px solid transparent;
+            line-height: 1.4;
+        }
+
+        .toc-item.active .toc-link {
+            color: var(--black);
+            font-weight: 600;
+            border-left-color: var(--black);
+            background: var(--grey-100);
+        }
+
+        .toc-link:hover {
+            color: var(--black);
+            background: var(--grey-100);
+        }
+
+        /* Mobile TOC Toggle Button */
+        .toc-toggle {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--black);
+            border: none;
+            cursor: pointer;
+            z-index: 999;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s;
+        }
+
+        .toc-toggle.show {
+            display: flex;
+        }
+
+        .toc-toggle:hover {
+            background: var(--grey-900);
+            transform: scale(1.05);
+        }
+
+        .toc-toggle:active {
+            transform: scale(0.95);
+        }
+
+        .toc-hamburger-line {
+            width: 20px;
+            height: 2px;
+            background: var(--white);
+            transition: all 0.2s;
+        }
+
+        /* Mobile TOC Drawer */
+        .toc-drawer {
+            position: fixed;
+            top: 0;
+            right: -280px;
+            width: 280px;
+            height: 100vh;
+            background: var(--white);
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+            transition: right 0.3s ease;
+            z-index: 1001;
+            overflow-y: auto;
+        }
+
+        .toc-drawer.open {
+            right: 0;
+        }
+
+        .toc-drawer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--space-3);
+            border-bottom: 1px solid var(--grey-200);
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--black);
+        }
+
+        .toc-drawer-close {
+            background: transparent;
+            border: none;
+            font-size: 32px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--grey-500);
+            transition: color 0.2s;
+        }
+
+        .toc-drawer-close:hover {
+            color: var(--black);
+        }
+
+        .toc-drawer .toc-nav {
+            border: none;
+            padding: var(--space-3);
+        }
+
+        .toc-drawer .toc-header {
+            display: none;
+        }
+
+        /* TOC Backdrop */
+        .toc-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toc-backdrop.show {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* Hide desktop TOC on mobile, show mobile controls */
+        @media (max-width: 899px) {
+            .toc-container {
+                display: none !important;
+            }
+        }
+
+        /* Hide mobile controls on desktop */
+        @media (min-width: 900px) {
+            .toc-toggle {
+                display: none !important;
+            }
+
+            .toc-drawer {
+                display: none !important;
+            }
+
+            .toc-backdrop {
+                display: none !important;
+            }
+        }
