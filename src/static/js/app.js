@@ -1451,6 +1451,9 @@ Transcript: {transcript}`;
             document.getElementById('dropzoneValidating').textContent = 'Validating...';
             document.getElementById('dropzoneValidating').style.color = '#888';
 
+            // Show import buttons container
+            document.getElementById('importButtonsContainer').style.display = 'flex';
+
             // Validate file
             await validateImportFile(file);
         }
@@ -1638,6 +1641,9 @@ Transcript: {transcript}`;
 
             // Hide preview
             document.getElementById('validationPreview').style.display = 'none';
+
+            // Hide import buttons container
+            document.getElementById('importButtonsContainer').style.display = 'none';
 
             // Disable import button
             document.getElementById('importButton').disabled = true;
