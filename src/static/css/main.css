@@ -1360,7 +1360,7 @@
             max-height: calc(100vh - 140px);
             overflow-y: auto;
             display: none;
-            z-index: 100;
+            z-index: 1000;
         }
 
         .toc-container.show {
@@ -1368,8 +1368,8 @@
         }
 
         .toc-nav {
-            background: var(--white);
-            border: 1px solid var(--grey-200);
+            background: var(--black);
+            border: 1px solid var(--black);
             padding: var(--space-2);
         }
 
@@ -1382,7 +1382,7 @@
             color: var(--grey-500);
             margin-bottom: var(--space-2);
             padding-bottom: var(--space-1);
-            border-bottom: 1px solid var(--grey-200);
+            border-bottom: 1px solid var(--grey-700);
         }
 
         .toc-list {
@@ -1400,7 +1400,7 @@
             padding: var(--space-1);
             font-family: var(--font-mono);
             font-size: 12px;
-            color: var(--grey-600);
+            color: var(--grey-300);
             text-decoration: none;
             transition: all 0.2s;
             border-left: 2px solid transparent;
@@ -1408,15 +1408,15 @@
         }
 
         .toc-item.active .toc-link {
-            color: var(--black);
+            color: var(--white);
             font-weight: 600;
-            border-left-color: var(--black);
-            background: var(--grey-100);
+            border-left-color: var(--white);
+            background: var(--grey-900);
         }
 
         .toc-link:hover {
-            color: var(--black);
-            background: var(--grey-100);
+            color: var(--white);
+            background: var(--grey-900);
         }
 
         /* Mobile TOC Toggle Button */
@@ -1468,8 +1468,8 @@
             right: -280px;
             width: 280px;
             height: 100vh;
-            background: var(--white);
-            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+            background: var(--black);
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.5);
             transition: right 0.3s ease;
             z-index: 1001;
             overflow-y: auto;
@@ -1484,11 +1484,11 @@
             justify-content: space-between;
             align-items: center;
             padding: var(--space-3);
-            border-bottom: 1px solid var(--grey-200);
+            border-bottom: 1px solid var(--grey-700);
             font-family: var(--font-mono);
             font-size: 14px;
             font-weight: 600;
-            color: var(--black);
+            color: var(--white);
         }
 
         .toc-drawer-close {
@@ -1508,7 +1508,7 @@
         }
 
         .toc-drawer-close:hover {
-            color: var(--black);
+            color: var(--white);
         }
 
         .toc-drawer .toc-nav {
