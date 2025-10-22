@@ -39,15 +39,12 @@ class ExportManager:
     EXPORT_LEVEL_COMPLETE = "complete"
 
     # Credentials to exclude from export (security - these should NOT be exported)
+    # Only actual secrets are excluded - API keys and passwords
+    # Email addresses (TARGET_EMAIL, SMTP_USER) ARE exported for backup purposes
     EXCLUDED_CREDENTIALS = {
-        "OPENAI_API_KEY",
-        "SMTP_SERVER",
-        "SMTP_PORT",
-        "SMTP_USER",
-        "SMTP_PASS",
-        "SMTP_USERNAME",
-        "SMTP_PASSWORD",
-        "TARGET_EMAIL",
+        "OPENAI_API_KEY",   # OpenAI API key - never export
+        "SMTP_PASS",        # Gmail App Password - never export
+        "SMTP_PASSWORD",    # Alias for SMTP_PASS - never export
     }
 
     def __init__(

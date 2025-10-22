@@ -59,6 +59,15 @@ class ImportManager:
     # Schema version for compatibility checking
     SUPPORTED_SCHEMA_VERSION = "1.0"
 
+    # Credentials to exclude from import (security - these should NOT be imported)
+    # This prevents malicious export files from overwriting credentials
+    # Must match the exclusion list in ExportManager for security symmetry
+    EXCLUDED_CREDENTIALS = {
+        "OPENAI_API_KEY",   # OpenAI API key - never import
+        "SMTP_PASS",        # Gmail App Password - never import
+        "SMTP_PASSWORD",    # Alias for SMTP_PASS - never import
+    }
+
     # Valid processing statuses
     VALID_PROCESSING_STATUSES = {
         "pending",
@@ -183,6 +192,14 @@ class ImportManager:
             if not isinstance(settings, dict):
                 errors.append("'settings' must be a dictionary")
             else:
+                # Check for credentials in import file (security warning)
+                found_credentials = [key for key in settings if key in self.EXCLUDED_CREDENTIALS]
+                if found_credentials:
+                    warnings.append(
+                        f"Security: Found {len(found_credentials)} credential(s) that will be skipped: "
+                        f"{', '.join(found_credentials)}. Existing credentials will be preserved."
+                    )
+
                 settings_errors = self._validate_settings(settings)
                 errors.extend(settings_errors)
 
@@ -236,7 +253,16 @@ class ImportManager:
         if data.get("export_level") == "complete":
             import_settings = data.get("settings", {})
 
+            # Check for credentials in import file (security warning)
+            found_credentials = [key for key in import_settings if key in self.EXCLUDED_CREDENTIALS]
+            if found_credentials:
+                settings_details.append(f"⚠️ SECURITY: Found {len(found_credentials)} credential(s) that will be SKIPPED: {', '.join(found_credentials)}")
+
             for key, new_value in import_settings.items():
+                # Skip credentials in preview
+                if key in self.EXCLUDED_CREDENTIALS:
+                    continue
+
                 if key == "ai_prompt_template":
                     # Compare AI prompt
                     current_prompt = self.config_manager.get_prompt()
@@ -329,6 +355,21 @@ class ImportManager:
                 try:
                     settings = data.get("settings", {})
 
+                    # SECURITY: Filter out credentials before processing
+                    # This prevents malicious export files from overwriting credentials
+                    filtered_settings = {}
+                    skipped_credentials = []
+
+                    for key, value in settings.items():
+                        if key in self.EXCLUDED_CREDENTIALS:
+                            skipped_credentials.append(key)
+                            logger.warning(f"Skipping credential import for security: {key}")
+                        else:
+                            filtered_settings[key] = value
+
+                    if skipped_credentials:
+                        logger.info(f"Skipped {len(skipped_credentials)} credentials for security: {skipped_credentials}")
+
                     # Separate config.txt settings from .env settings
                     config_settings = {}
                     env_settings = {}
@@ -339,7 +380,7 @@ class ImportManager:
                         "MAX_VIDEOS_PER_CHANNEL", "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
                     }
 
-                    for key, value in settings.items():
+                    for key, value in filtered_settings.items():
                         if key == "ai_prompt_template":
                             # Handle AI prompt separately
                             self.config_manager.set_prompt(value)
