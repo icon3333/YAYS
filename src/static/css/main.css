@@ -1354,10 +1354,10 @@
         /* Desktop TOC Container */
         .toc-container {
             position: fixed;
-            top: 120px;
+            top: 140px;
             right: 20px;
             width: 200px;
-            max-height: calc(100vh - 140px);
+            max-height: calc(100vh - 160px);
             overflow-y: auto;
             display: none;
             z-index: 1000;
@@ -1374,21 +1374,13 @@
         }
 
         .toc-nav {
-            background: var(--white);
-            border: 1px solid var(--grey-200);
-            padding: var(--space-2);
+            background: transparent;
+            border: none;
+            padding: 0;
         }
 
         .toc-header {
-            font-family: var(--font-mono);
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--grey-500);
-            margin-bottom: var(--space-2);
-            padding-bottom: var(--space-1);
-            border-bottom: 1px solid var(--grey-200);
+            display: none;
         }
 
         .toc-list {
