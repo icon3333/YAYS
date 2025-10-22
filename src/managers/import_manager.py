@@ -399,13 +399,19 @@ class ImportManager:
 
                     # Import .env settings
                     if env_settings:
+                        logger.info(f"Attempting to import {len(env_settings)} .env settings: {list(env_settings.keys())}")
                         success, message, import_errors = self.settings_manager.update_multiple_settings(env_settings)
                         if success:
                             settings_updated += len(env_settings)
-                            logger.info(f"Imported {len(env_settings)} .env settings")
+                            logger.info(f"✅ Successfully imported {len(env_settings)} .env settings")
                         else:
-                            logger.warning(f"Some .env settings failed: {import_errors}")
+                            logger.warning(f"⚠️ Some .env settings failed: {message}")
+                            if import_errors:
+                                for error in import_errors:
+                                    logger.warning(f"  - {error}")
                             # Don't fail the whole import, just log warnings
+                    else:
+                        logger.info("No .env settings to import")
 
                     logger.info(f"Imported total {settings_updated} settings")
 

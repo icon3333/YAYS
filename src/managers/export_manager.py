@@ -285,11 +285,20 @@ class ExportManager:
 
             # Get application settings from .env (exclude credentials)
             env_settings = self.settings_manager.get_all_settings(mask_secrets=False)
+            env_exported_count = 0
             for key, value in env_settings.items():
                 if key not in self.EXCLUDED_CREDENTIALS:
-                    settings[key] = value
+                    # Extract actual value from nested dict structure
+                    # get_all_settings() returns {'key': {'value': 'actual_value', 'type': '...', ...}}
+                    if isinstance(value, dict) and 'value' in value:
+                        settings[key] = value['value']
+                    else:
+                        settings[key] = value  # Fallback for simple values
+                    env_exported_count += 1
+                else:
+                    logger.debug(f"Skipping credential: {key}")
 
-            logger.debug(f"Extracted {len(settings)} settings (config.txt + .env)")
+            logger.debug(f"Extracted {len(settings)} total settings: {len(config_keys)} from config.txt, {env_exported_count} from .env, {'1 AI prompt' if ai_prompt else '0 AI prompt'}")
             return settings
 
         except Exception as e:
