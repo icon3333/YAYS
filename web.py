@@ -2801,8 +2801,12 @@ async def update_settings(data: MultipleSettingsUpdate):
         env_updates = {}
         config_updates = {}
 
-        # Separate env vs config settings
+        # Separate env vs config settings (skip empty values)
         for key, value in data.settings.items():
+            # Skip empty values - don't overwrite existing settings with empty strings
+            if not value and isinstance(value, str):
+                continue
+
             if key in settings_manager.env_schema:
                 env_updates[key] = value
             elif key in ['SUMMARY_LENGTH', 'SKIP_SHORTS', 'MAX_VIDEOS_PER_CHANNEL']:
