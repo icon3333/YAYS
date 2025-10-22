@@ -24,13 +24,20 @@
    - ✅ AI Prompt Template (✏️)
    - ✅ Email configuration: Target Email and Gmail SMTP User
 
-3. **Verified Import Security:**
-   - ✅ Import only processes what's in export file
-   - ✅ Credentials not in export = can't be imported = existing credentials preserved
-   - ✅ No credential overwrite risk
+3. **Enhanced Import Security (Defense-in-Depth):**
+   - ✅ Added EXCLUDED_CREDENTIALS filter in ImportManager (lines 62-69)
+   - ✅ Import actively filters out credentials before processing (lines 341-354)
+   - ✅ Preview shows security warning if credentials found in file (lines 248-251)
+   - ✅ Validation adds warning if credentials detected (lines 195-201)
+   - ✅ Prevents malicious edited export files from overwriting credentials
+   - ✅ Logging tracks any skipped credentials for security audit
 
-**Security Guarantee:**
-> All API keys and passwords remain on the source system and are NEVER included in backup files. Email addresses (which are not sensitive) are safely exported for backup/restore convenience.
+**Security Guarantee (Defense-in-Depth):**
+> All API keys and passwords are protected by TWO layers of security:
+> 1. **Export Layer**: Credentials are NEVER included in export files
+> 2. **Import Layer**: Even if someone manually adds credentials to an export file, they will be detected, logged, and skipped during import
+>
+> This dual-layer approach ensures credentials never leave your system, even in the face of malicious or modified export files.
 
 ---
 
@@ -165,7 +172,7 @@ Returns preview with:
 - total_size_mb: File size in MB
 
 ### Step 3: Data Import
-**Method**: `import_data()` (lines 267-403)
+**Method**: `import_data()` (lines 283-459)
 
 **Import Sequence**:
 
@@ -187,13 +194,27 @@ Returns preview with:
    # Skips duplicates by video_id
    ```
 
-4. **Import Settings** (lines 327-377):
+4. **Import Settings with Credential Filtering** (lines 336-418):
    ```python
-   # Separate settings by destination
+   # SECURITY: Filter out credentials before processing
+   filtered_settings = {}
+   skipped_credentials = []
+
+   for key, value in settings.items():
+       if key in self.EXCLUDED_CREDENTIALS:
+           skipped_credentials.append(key)
+           logger.warning(f"Skipping credential import for security: {key}")
+       else:
+           filtered_settings[key] = value
+
+   if skipped_credentials:
+       logger.info(f"Skipped {len(skipped_credentials)} credentials for security: {skipped_credentials}")
+
+   # Separate filtered settings by destination
    config_settings = {}  # SUMMARY_LENGTH, SKIP_SHORTS, etc.
    env_settings = {}     # All other non-credential settings
-   
-   # For each setting in import data:
+
+   # For each setting in filtered data:
    if key == "ai_prompt_template":
        self.config_manager.set_prompt(value)
    elif key in config_keys:
@@ -416,7 +437,39 @@ def test_smtp_credentials(smtp_user: str, smtp_pass: str) -> Tuple[bool, str]:
 
 ---
 
-## 5. SECURITY FEATURES
+## 5. SECURITY FEATURES (DEFENSE-IN-DEPTH)
+
+### Two-Layer Security Architecture
+
+**Layer 1: Export Protection**
+- Export Manager actively filters credentials before creating export files
+- See: `export_manager.py` lines 41-48 (EXCLUDED_CREDENTIALS)
+- See: `export_manager.py` lines 286-290 (filtering code)
+
+**Layer 2: Import Protection** ⭐ NEW
+- Import Manager validates and filters credentials even if present in import file
+- See: `import_manager.py` lines 62-69 (EXCLUDED_CREDENTIALS)
+- See: `import_manager.py` lines 341-354 (filtering code)
+- See: `import_manager.py` lines 248-251 (preview warning)
+- See: `import_manager.py` lines 195-201 (validation warning)
+
+### Why Defense-in-Depth?
+
+**Threat Model:**
+1. Normal export files never contain credentials (Layer 1 protection)
+2. Malicious actor manually edits export file to add credentials
+3. User unknowingly imports the malicious file
+4. Layer 2 protection detects, logs, and skips credentials
+5. User's existing credentials are preserved
+
+**Security Benefits:**
+- ✅ Prevents accidental credential exports
+- ✅ Prevents malicious credential imports
+- ✅ Audit trail via logging
+- ✅ User notifications via preview warnings
+- ✅ Symmetric protection (export + import)
+
+## 5A. DETAILED SECURITY FEATURES
 
 ### What Is EXPORTED
 - Channels and channel names
