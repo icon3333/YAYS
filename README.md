@@ -12,7 +12,7 @@ Monitor YouTube channels → Extract transcripts → Generate AI summaries → E
 
 **Features:**
 - 🤖 AI summaries using OpenAI (GPT-4o, GPT-4o-mini, o1-mini)
-- 📧 Email delivery to inbox or RSS reader via email-to-tag
+- 📧 Email delivery to inbox or RSS reader (Inoreader, The Old Reader, etc.)
 - 📱 Web UI - Mobile-first interface
 - 🔄 Auto-processing every 4 hours
 - 💾 Import/Export - Backup your data
@@ -58,14 +58,6 @@ That's it. The script handles everything:
 - OpenAI API key ([platform.openai.com/api-keys](https://platform.openai.com/api-keys))
 - Target email (your inbox or RSS reader email)
 - Gmail SMTP app password ([myaccount.google.com/security](https://myaccount.google.com/security))
-
----
-
-## Docker Note
-
-**Pre-built Docker images are not currently available.** You'll need to build the containers locally on your machine. The install script handles this automatically - it downloads the code and builds the images for you.
-
-Pre-built images may be available in the future, but for now, the build process is handled during installation.
 
 ---
 
@@ -146,27 +138,6 @@ docker compose up -d
 docker compose logs web
 docker compose logs summarizer
 ```
-
----
-
-## Remote Access
-
-### Tailscale (Recommended)
-
-```bash
-# On server
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Access from anywhere
-http://your-server-name:8015
-```
-
-**Why Tailscale:**
-- No port forwarding needed
-- End-to-end encrypted
-- Works behind NAT
-- Free for personal use
 
 ---
 

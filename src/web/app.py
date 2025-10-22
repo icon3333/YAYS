@@ -362,6 +362,10 @@ async def get_settings():
 async def update_settings(data: MultipleSettingsUpdate):
     """Update multiple settings at once"""
     try:
+        # Debug logging
+        logger.info(f"Received settings update request with {len(data.settings)} settings")
+        logger.debug(f"Settings keys: {list(data.settings.keys())}")
+
         env_updates = {}
         config_updates = {}
 
@@ -376,8 +380,10 @@ async def update_settings(data: MultipleSettingsUpdate):
 
         # Update .env settings
         if env_updates:
+            logger.info(f"Updating {len(env_updates)} env settings: {list(env_updates.keys())}")
             success, message, errors = settings_manager.update_multiple_settings(env_updates)
             if not success:
+                logger.error(f"Validation failed: {errors}")
                 raise HTTPException(status_code=400, detail={"message": message, "errors": errors})
             results["env"] = message
             results["restart_required"] = True

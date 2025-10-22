@@ -230,15 +230,19 @@ class SettingsManager:
         """
         Validate a single setting value
         Returns (is_valid, error_message)
+
+        Note: Empty values are allowed for required fields during updates.
+        This allows partial updates without having to resend masked secrets.
         """
         if key not in self.env_schema:
             return False, f"Unknown setting: {key}"
 
         schema = self.env_schema[key]
 
-        # Check required
-        if schema.get('required', False) and not value:
-            return False, f"{key} is required"
+        # Allow empty values for required fields (means "don't update this field")
+        # The field must exist in .env already, but we don't validate that here
+        if not value:
+            return True, ''
 
         # Type-specific validation
         if schema['type'] == 'secret':
@@ -326,6 +330,9 @@ class SettingsManager:
         """
         Update multiple settings at once (more efficient)
         Returns (success, message, list of errors)
+
+        Note: Empty values are skipped (not written to .env).
+        This allows partial updates without affecting existing secrets.
         """
         errors = []
 
@@ -347,17 +354,23 @@ class SettingsManager:
                 # Read existing .env
                 env_vars = self._parse_env_file()
 
-                # Update all values
+                # Update only non-empty values
+                updated_count = 0
                 for key, value in settings.items():
+                    if not value:
+                        # Skip empty values (means "don't update this field")
+                        continue
+
                     # Clean value if needed
                     if key == 'SMTP_PASS':
                         value = value.replace(' ', '')
                     env_vars[key] = value
+                    updated_count += 1
 
                 # Write back
                 self._write_env_file(env_vars)
 
-                return True, f"Updated {len(settings)} settings successfully", []
+                return True, f"Updated {updated_count} settings successfully", []
 
         except Exception as e:
             # Try to restore from backup
