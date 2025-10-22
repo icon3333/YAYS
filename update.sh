@@ -6,18 +6,24 @@ set -e  # Exit on error
 echo "🔄 Updating YAYS to latest version..."
 echo ""
 
-# Stop containers
+# Stop containers and remove volumes
 echo "📦 Stopping containers..."
-docker compose down
+docker compose down -v
 
 # Discard local changes and pull latest
 echo "⬇️  Pulling latest code from GitHub..."
 git fetch origin
 git reset --hard origin/main
 
-# Rebuild without cache (ensures all dependencies are fresh)
+# Show what version we're updating to
+echo ""
+echo "📌 Updated to:"
+git log --oneline -3
+echo ""
+
+# Rebuild without cache and pull latest base images
 echo "🔨 Rebuilding containers (this takes ~60 seconds)..."
-docker compose build --no-cache
+docker compose build --no-cache --pull
 
 # Start containers
 echo "🚀 Starting containers..."
