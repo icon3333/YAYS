@@ -462,6 +462,39 @@
         </div>
     </div>
 
+    <!-- Table of Contents (Desktop) -->
+    <div class="toc-container" id="tocContainer">
+        <nav class="toc-nav">
+            <div class="toc-header">Contents</div>
+            <ul class="toc-list" id="tocList">
+                <!-- Dynamically populated -->
+            </ul>
+        </nav>
+    </div>
+
+    <!-- Table of Contents Toggle (Mobile) -->
+    <button class="toc-toggle" id="tocToggle" aria-label="Open table of contents">
+        <span class="toc-hamburger-line"></span>
+        <span class="toc-hamburger-line"></span>
+        <span class="toc-hamburger-line"></span>
+    </button>
+
+    <!-- Table of Contents Drawer (Mobile) -->
+    <div class="toc-drawer" id="tocDrawer">
+        <div class="toc-drawer-header">
+            <span>Contents</span>
+            <button class="toc-drawer-close" id="tocDrawerClose" aria-label="Close">&times;</button>
+        </div>
+        <nav class="toc-nav">
+            <ul class="toc-list" id="tocListMobile">
+                <!-- Dynamically populated -->
+            </ul>
+        </nav>
+    </div>
+
+    <!-- TOC Backdrop (Mobile) -->
+    <div class="toc-backdrop" id="tocBackdrop"></div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -62,6 +62,8 @@
             if (channels.length === 0) {
                 empty.style.display = 'block';
                 container.innerHTML = '';
+                // Regenerate TOC after rendering
+                setTimeout(() => generateTOC(), 50);
                 return;
             }
 
@@ -107,6 +109,9 @@
                 `;
                 container.appendChild(div);
             });
+
+            // Regenerate TOC after rendering
+            setTimeout(() => generateTOC(), 50);
         }
 
         // HTML escape
@@ -692,6 +697,12 @@
             } else if (tabName === 'ai') {
                 loadAITab();
             }
+
+            // Generate TOC for the new tab (after content is visible)
+            // Use setTimeout to ensure DOM is updated
+            setTimeout(() => {
+                generateTOC();
+            }, 50);
         }
 
         // ============================================================================
@@ -1646,4 +1657,234 @@ Transcript: {transcript}`;
             // Clear file input
             document.getElementById('importFileInput').value = '';
         }
+
+        // ============================================================================
+        // TABLE OF CONTENTS (TOC) NAVIGATION
+        // ============================================================================
+
+        // Global state for TOC
+        let tocObserver = null;
+        let currentActiveSection = null;
+
+        // Generate TOC for the current active tab
+        function generateTOC() {
+            // Find the currently active tab
+            const activeTab = document.querySelector('.tab-content.active');
+            if (!activeTab) {
+                hideTOC();
+                return;
+            }
+
+            // Find all h3 elements within .settings-section
+            const sections = activeTab.querySelectorAll('.settings-section h3');
+
+            // Apply threshold: only show TOC if 2 or more sections exist
+            if (sections.length < 2) {
+                hideTOC();
+                return;
+            }
+
+            // Extract section data
+            const tocItems = [];
+            sections.forEach((heading, index) => {
+                // Extract text and remove emojis
+                const rawText = heading.textContent || heading.innerText;
+                const text = rawText.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').replace(/[^\x00-\x7F]/g, '').trim();
+
+                // Generate unique ID
+                const baseId = text.toLowerCase()
+                    .replace(/\s+/g, '-')
+                    .replace(/[^a-z0-9-]/g, '')
+                    .replace(/-+/g, '-')
+                    .replace(/^-|-$/g, '');
+
+                // Handle empty or duplicate IDs
+                const id = baseId || `section-${index}`;
+                const uniqueId = `section-${id}`;
+
+                // Add ID to the section's parent (.settings-section)
+                const section = heading.closest('.settings-section');
+                if (section) {
+                    section.id = uniqueId;
+                }
+
+                tocItems.push({ id: uniqueId, text: text || `Section ${index + 1}` });
+            });
+
+            // Render TOC
+            renderTOC(tocItems);
+
+            // Initialize scroll-spy
+            initScrollSpy();
+
+            // Show TOC
+            showTOC();
+        }
+
+        // Render TOC HTML for both desktop and mobile
+        function renderTOC(items) {
+            // Render desktop TOC
+            const tocList = document.getElementById('tocList');
+            tocList.innerHTML = '';
+
+            items.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = 'toc-item';
+                if (index === 0) li.classList.add('active'); // First item active by default
+
+                const link = document.createElement('a');
+                link.href = `#${item.id}`;
+                link.className = 'toc-link';
+                link.textContent = item.text;
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    scrollToSection(item.id);
+                });
+
+                li.appendChild(link);
+                tocList.appendChild(li);
+            });
+
+            // Render mobile TOC (same structure)
+            const tocListMobile = document.getElementById('tocListMobile');
+            tocListMobile.innerHTML = '';
+
+            items.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = 'toc-item';
+                if (index === 0) li.classList.add('active');
+
+                const link = document.createElement('a');
+                link.href = `#${item.id}`;
+                link.className = 'toc-link';
+                link.textContent = item.text;
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    scrollToSection(item.id);
+                    closeMobileTOC(); // Close drawer after navigation
+                });
+
+                li.appendChild(link);
+                tocListMobile.appendChild(li);
+            });
+        }
+
+        // Initialize scroll-spy with Intersection Observer
+        function initScrollSpy() {
+            // Clean up existing observer
+            if (tocObserver) {
+                tocObserver.disconnect();
+            }
+
+            // Find all sections with IDs starting with "section-"
+            const sections = document.querySelectorAll('.settings-section[id^="section-"]');
+
+            if (sections.length === 0) return;
+
+            // Create Intersection Observer
+            tocObserver = new IntersectionObserver(
+                (entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting && entry.intersectionRatio > 0) {
+                            setActiveSection(entry.target.id);
+                        }
+                    });
+                },
+                {
+                    root: null, // viewport
+                    rootMargin: '-20% 0px -75% 0px', // Top 20% of viewport
+                    threshold: 0
+                }
+            );
+
+            // Observe all sections
+            sections.forEach(section => {
+                tocObserver.observe(section);
+            });
+        }
+
+        // Set active section in TOC
+        function setActiveSection(sectionId) {
+            if (currentActiveSection === sectionId) return;
+            currentActiveSection = sectionId;
+
+            // Update desktop TOC
+            document.querySelectorAll('#tocList .toc-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            const activeLink = document.querySelector(`#tocList .toc-link[href="#${sectionId}"]`);
+            if (activeLink) {
+                activeLink.closest('.toc-item').classList.add('active');
+            }
+
+            // Update mobile TOC
+            document.querySelectorAll('#tocListMobile .toc-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            const activeLinkMobile = document.querySelector(`#tocListMobile .toc-link[href="#${sectionId}"]`);
+            if (activeLinkMobile) {
+                activeLinkMobile.closest('.toc-item').classList.add('active');
+            }
+        }
+
+        // Scroll to section (instant, no smooth animation)
+        function scrollToSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (!section) return;
+
+            // Instant scroll
+            section.scrollIntoView({
+                behavior: 'auto',
+                block: 'start'
+            });
+
+            // Update active state immediately
+            setActiveSection(sectionId);
+        }
+
+        // Show TOC
+        function showTOC() {
+            document.getElementById('tocContainer').classList.add('show');
+            document.getElementById('tocToggle').classList.add('show');
+        }
+
+        // Hide TOC
+        function hideTOC() {
+            document.getElementById('tocContainer').classList.remove('show');
+            document.getElementById('tocToggle').classList.remove('show');
+
+            // Clean up observer
+            if (tocObserver) {
+                tocObserver.disconnect();
+                tocObserver = null;
+            }
+
+            // Reset state
+            currentActiveSection = null;
+        }
+
+        // Mobile TOC toggle handlers
+        function openMobileTOC() {
+            document.getElementById('tocDrawer').classList.add('open');
+            document.getElementById('tocBackdrop').classList.add('show');
+        }
+
+        function closeMobileTOC() {
+            document.getElementById('tocDrawer').classList.remove('open');
+            document.getElementById('tocBackdrop').classList.remove('show');
+        }
+
+        // Event listeners for mobile TOC
+        document.getElementById('tocToggle').addEventListener('click', openMobileTOC);
+        document.getElementById('tocDrawerClose').addEventListener('click', closeMobileTOC);
+        document.getElementById('tocBackdrop').addEventListener('click', closeMobileTOC);
+
+        // Close mobile TOC on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeMobileTOC();
+            }
+        });
 
