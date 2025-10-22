@@ -1608,6 +1608,12 @@ Transcript: {transcript}`;
                     await loadChannels();
                     await refreshFeed();
 
+                    // Refresh settings to show updated values immediately
+                    if (result.settings_updated > 0) {
+                        await loadSettings();
+                        await loadPrompt();  // Refresh AI prompt template if updated
+                    }
+
                 } else {
                     const errors = result.errors.join('; ');
                     showStatus('settingsStatus', `Import failed: ${errors}`, 'error');
