@@ -51,8 +51,20 @@ app = FastAPI(
     description="Modern minimalist design"
 )
 
-# Mount static files (with caching disabled for development)
-app.mount("/static", StaticFiles(directory="src/static", html=False), name="static")
+# Mount static files with custom StaticFiles class to disable caching
+from starlette.staticfiles import StaticFiles as StarletteStaticFiles
+from starlette.responses import Response
+
+class NoCacheStaticFiles(StarletteStaticFiles):
+    """StaticFiles with cache-control headers to prevent caching"""
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+app.mount("/static", NoCacheStaticFiles(directory="src/static", html=False), name="static")
 
 # Setup templates
 templates = Jinja2Templates(directory="src/templates")
