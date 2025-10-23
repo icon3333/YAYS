@@ -146,12 +146,24 @@
         async function confirmRemove() {
             if (!pendingRemoval) return;
 
+            const removedChannelId = pendingRemoval;
+
             channels = channels.filter(id => id !== pendingRemoval);
             delete channelNames[pendingRemoval];
 
             closeModal();
             await saveChannels();
             renderChannels();
+
+            // Update channel filter dropdown
+            populateChannelFilter();
+
+            // If the removed channel was being viewed in feed, clear filter and reload
+            const currentFilter = document.getElementById('feedChannelFilter').value;
+            if (currentFilter === removedChannelId) {
+                document.getElementById('feedChannelFilter').value = '';
+                await loadVideoFeed(true);
+            }
         }
 
 
