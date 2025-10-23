@@ -17,6 +17,7 @@ python-multipart>=0.0.6     # Required for file upload endpoints
 filelock==3.16.1            # Cross-platform file locking
 python-dotenv==1.0.1        # Environment variable management (optional)
 apscheduler>=3.10.0         # Background task scheduling
+cryptography>=41.0.0        # Fernet encryption for secure settings storage
 
 # Production dependencies (optional but recommended)
 # gunicorn==23.0.0          # Production WSGI server (alternative to uvicorn)
