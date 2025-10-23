@@ -6,11 +6,12 @@ Tracks processed videos with metadata for stats and feed
 
 import sqlite3
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 from src.utils.formatters import format_duration, format_views, format_upload_date, format_processed_date
+from src.utils.encryption import get_encryption
 
 
 class VideoDatabase:
@@ -38,6 +39,56 @@ class VideoDatabase:
             raise e
         finally:
             conn.close()
+
+    def _encrypt_value(self, value: str) -> str:
+        """Encrypt a value using Fernet encryption"""
+        if not value:
+            return ''
+        enc = get_encryption()
+        return enc.encrypt(value)
+
+    def _decrypt_value(self, value: str) -> str:
+        """Decrypt a value using Fernet encryption"""
+        if not value:
+            return ''
+        enc = get_encryption()
+        return enc.decrypt(value)
+
+    def _video_row_to_dict(self, row: sqlite3.Row, include_summary: bool = True) -> Dict[str, Any]:
+        """
+        Convert a SQLite row to a video dictionary with formatted fields.
+
+        Args:
+            row: SQLite row from videos table
+            include_summary: Whether to include summary_text and summary_length
+
+        Returns:
+            Dict with video data and formatted fields
+        """
+        video = {
+            'id': row['id'],
+            'channel_id': row['channel_id'],
+            'channel_name': row['channel_name'] or row['channel_id'],
+            'title': row['title'],
+            'duration_seconds': row['duration_seconds'],
+            'duration_formatted': format_duration(row['duration_seconds']),
+            'view_count': row['view_count'],
+            'view_count_formatted': format_views(row['view_count']),
+            'upload_date': row['upload_date'],
+            'upload_date_formatted': format_upload_date(row['upload_date']),
+            'processed_date': row['processed_date'],
+            'processed_date_formatted': format_processed_date(row['processed_date']),
+            'processing_status': row['processing_status'],
+            'error_message': row['error_message'],
+            'email_sent': bool(row['email_sent']),
+            'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
+        }
+
+        if include_summary:
+            video['summary_text'] = row['summary_text']
+            video['summary_length'] = row['summary_length']
+
+        return video
 
     def _init_db(self):
         """Initialize database schema"""
@@ -200,9 +251,6 @@ class VideoDatabase:
         Secrets are encrypted before storage.
         Only runs if settings are still empty (hasn't been migrated yet).
         """
-        import os
-        from src.utils.encryption import get_encryption
-
         env_path = '.env'
         if not os.path.exists(env_path):
             return  # No .env file to migrate
@@ -234,9 +282,6 @@ class VideoDatabase:
             if not env_vars:
                 return  # Nothing to migrate
 
-            # Get encryption instance
-            enc = get_encryption()
-
             # Define which keys should be encrypted
             encrypted_keys = {'OPENAI_API_KEY', 'SMTP_PASS'}
 
@@ -255,21 +300,14 @@ class VideoDatabase:
                         # Update existing setting
                         should_encrypt = row[0] or (key in encrypted_keys)
 
-                        if should_encrypt:
-                            # Encrypt the value
-                            encrypted_value = enc.encrypt(value)
-                            cursor.execute("""
-                                UPDATE settings
-                                SET value = ?, encrypted = 1, updated_at = CURRENT_TIMESTAMP
-                                WHERE key = ?
-                            """, (encrypted_value, key))
-                        else:
-                            # Store plaintext
-                            cursor.execute("""
-                                UPDATE settings
-                                SET value = ?, updated_at = CURRENT_TIMESTAMP
-                                WHERE key = ?
-                            """, (value, key))
+                        # Encrypt if needed using helper method
+                        final_value = self._encrypt_value(value) if should_encrypt else value
+
+                        cursor.execute("""
+                            UPDATE settings
+                            SET value = ?, encrypted = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = ?
+                        """, (final_value, int(should_encrypt), key))
 
                         imported += 1
 
@@ -585,24 +623,7 @@ class VideoDatabase:
 
             videos = []
             for row in cursor.fetchall():
-                videos.append({
-                    'id': row['id'],
-                    'channel_id': row['channel_id'],
-                    'channel_name': row['channel_name'] or row['channel_id'],
-                    'title': row['title'],
-                    'duration_seconds': row['duration_seconds'],
-                    'duration_formatted': format_duration(row['duration_seconds']),
-                    'view_count': row['view_count'],
-                    'view_count_formatted': format_views(row['view_count']),
-                    'upload_date': row['upload_date'],
-                    'upload_date_formatted': format_upload_date(row['upload_date']),
-                    'processed_date': row['processed_date'],
-                    'processed_date_formatted': format_processed_date(row['processed_date']),
-                    'processing_status': row['processing_status'],
-                    'error_message': row['error_message'],
-                    'email_sent': bool(row['email_sent']),
-                    'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
-                })
+                videos.append(self._video_row_to_dict(row, include_summary=False))
 
             return videos
 
@@ -726,26 +747,7 @@ class VideoDatabase:
             if not row:
                 return None
 
-            return {
-                'id': row['id'],
-                'channel_id': row['channel_id'],
-                'channel_name': row['channel_name'],
-                'title': row['title'],
-                'duration_seconds': row['duration_seconds'],
-                'duration_formatted': format_duration(row['duration_seconds']),
-                'view_count': row['view_count'],
-                'view_count_formatted': format_views(row['view_count']),
-                'upload_date': row['upload_date'],
-                'upload_date_formatted': format_upload_date(row['upload_date']),
-                'processed_date': row['processed_date'],
-                'processed_date_formatted': format_processed_date(row['processed_date']),
-                'summary_text': row['summary_text'],
-                'processing_status': row['processing_status'],
-                'error_message': row['error_message'],
-                'email_sent': bool(row['email_sent']),
-                'summary_length': row['summary_length'],
-                'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
-            }
+            return self._video_row_to_dict(row, include_summary=True)
 
     def reset_video_status(self, video_id: str):
         """Reset video processing status to pending for retry"""
@@ -915,8 +917,6 @@ class VideoDatabase:
         Returns:
             Decrypted setting value or None if not found
         """
-        from src.utils.encryption import get_encryption
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
@@ -927,12 +927,8 @@ class VideoDatabase:
 
             value, encrypted = row[0], row[1]
 
-            # Decrypt if needed
-            if encrypted:
-                enc = get_encryption()
-                return enc.decrypt(value)
-            else:
-                return value
+            # Decrypt if needed using helper method
+            return self._decrypt_value(value) if encrypted else value
 
     def get_all_settings(self) -> Dict[str, Dict[str, str]]:
         """
@@ -942,10 +938,6 @@ class VideoDatabase:
         Returns:
             Dict mapping setting key to {value, type, description, encrypted}
         """
-        from src.utils.encryption import get_encryption
-
-        enc = get_encryption()
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -958,12 +950,11 @@ class VideoDatabase:
             for row in cursor.fetchall():
                 key, value, type_, encrypted, description = row
 
-                # Decrypt if needed
-                if encrypted:
-                    value = enc.decrypt(value)
+                # Decrypt if needed using helper method
+                decrypted_value = self._decrypt_value(value) if encrypted else value
 
                 settings[key] = {
-                    'value': value,
+                    'value': decrypted_value,
                     'type': type_,
                     'description': description or '',
                     'encrypted': bool(encrypted)
@@ -984,8 +975,6 @@ class VideoDatabase:
         Returns:
             True if successful
         """
-        from src.utils.encryption import get_encryption
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
@@ -995,10 +984,8 @@ class VideoDatabase:
 
             should_encrypt = encrypt if encrypt is not None else (row[0] if row else False)
 
-            # Encrypt if needed
-            if should_encrypt:
-                enc = get_encryption()
-                value = enc.encrypt(value)
+            # Encrypt if needed using helper method
+            final_value = self._encrypt_value(value) if should_encrypt else value
 
             cursor.execute("""
                 INSERT INTO settings (key, value, type, encrypted, description, updated_at)
@@ -1007,7 +994,7 @@ class VideoDatabase:
                     value = excluded.value,
                     encrypted = excluded.encrypted,
                     updated_at = CURRENT_TIMESTAMP
-            """, (key, value, int(should_encrypt)))
+            """, (key, final_value, int(should_encrypt)))
 
             conn.commit()
             return True
@@ -1024,9 +1011,6 @@ class VideoDatabase:
         Returns:
             Number of settings updated
         """
-        from src.utils.encryption import get_encryption
-
-        enc = get_encryption()
         updated_count = 0
 
         with self._get_connection() as conn:
@@ -1044,8 +1028,8 @@ class VideoDatabase:
                 elif key in existing_encryption:
                     should_encrypt = existing_encryption[key]
 
-                # Encrypt if needed
-                final_value = enc.encrypt(value) if should_encrypt else value
+                # Encrypt if needed using helper method
+                final_value = self._encrypt_value(value) if should_encrypt else value
 
                 cursor.execute("""
                     INSERT INTO settings (key, value, type, encrypted, description, updated_at)
