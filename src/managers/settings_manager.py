@@ -378,12 +378,11 @@ class SettingsManager:
                 new_lines.append(f"\n# Added by Settings Manager - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 new_lines.append(f"{key}={value}\n")
 
-        # Write atomically (temp file + rename)
-        temp_path = f"{self.env_path}.tmp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
+        # Write directly to .env file (Docker bind mount compatible)
+        # Note: This is safe because we're already protected by file locking
+        # Using os.replace() fails in Docker with bind-mounted files
+        with open(self.env_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
-
-        os.replace(temp_path, self.env_path)
 
     def check_restart_required(self) -> bool:
         """
