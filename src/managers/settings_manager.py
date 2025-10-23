@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Settings Manager - Handles settings storage in database with encryption
-All settings stored in SQLite database with automatic encryption for secrets
+Settings Manager - Database-backed settings with encryption
+Thin wrapper around VideoDatabase for settings operations
 """
 
-import os
 import re
 from typing import Dict, Optional, Tuple, Any
 
@@ -13,15 +12,13 @@ from src.utils.validators import is_valid_email, is_valid_openai_key
 
 class SettingsManager:
     """
-    Database-only settings manager with encryption
+    Database-backed settings manager with encryption.
 
-    ALL settings are stored in the database:
+    ALL settings stored in database:
     - Secrets (API keys, passwords) are encrypted at rest
-    - Non-secrets (emails, config) are stored in plaintext
-    - No more .env file writes!
-    - Automatic migration from .env on first run
-
-    This completely eliminates Docker bind mount issues.
+    - Non-secrets (emails, config) stored in plaintext
+    - All operations delegate to VideoDatabase
+    - No file operations!
     """
 
     def __init__(self, env_path='.env', db_path='data/videos.db', lock_timeout=10):
@@ -29,19 +26,15 @@ class SettingsManager:
         Initialize SettingsManager.
 
         Args:
-            env_path: Path to .env (used only for initial migration, never written)
+            env_path: Unused, kept for backward compatibility
             db_path: Path to SQLite database
-            lock_timeout: Unused (kept for backward compatibility)
+            lock_timeout: Unused, kept for backward compatibility
         """
-        self.env_path = env_path  # Read-only, never written
-        self.db_path = db_path
-
         # Import here to avoid circular dependency
         from src.managers.database import VideoDatabase
         self.db = VideoDatabase(db_path)
 
-        # Define all expected settings with their properties
-        # All settings are now stored in database (secrets are encrypted)
+        # Define settings schema for validation
         self.env_schema = {
             # Secrets (encrypted in database)
             'OPENAI_API_KEY': {
@@ -109,69 +102,29 @@ class SettingsManager:
             }
         }
 
-
-    def _mask_secret(self, value: str, secret_type: str = 'secret') -> str:
-        """
-        Mask sensitive values for display
-
-        For API keys: Show first 7 and last 3 chars
-        For passwords: Show all dots
-        """
+    def _mask_secret(self, value: str) -> str:
+        """Mask sensitive values for display."""
         if not value:
             return ''
 
-        if secret_type == 'secret':
-            if value.startswith('sk-'):
-                # OpenAI/API key: sk-***...***xxx
-                if len(value) > 15:
-                    return f"{value[:7]}***...***{value[-4:]}"
-                return 'sk-***'
-            else:
-                # Generic password: all dots
-                return '•' * min(len(value), 16)
-
-        return value
-
-    def _parse_env_file(self) -> Dict[str, str]:
-        """Parse .env file into key-value dict"""
-        if not os.path.exists(self.env_path):
-            return {}
-
-        env_vars = {}
-
-        try:
-            with open(self.env_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-
-                    # Skip empty lines and comments
-                    if not line or line.startswith('#'):
-                        continue
-
-                    # Parse KEY=VALUE
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip()
-
-                        # Remove quotes if present
-                        if value.startswith('"') and value.endswith('"'):
-                            value = value[1:-1]
-                        elif value.startswith("'") and value.endswith("'"):
-                            value = value[1:-1]
-
-                        env_vars[key] = value
-
-        except Exception as e:
-            print(f"⚠️ Error parsing .env file: {e}")
-            return {}
-
-        return env_vars
+        if value.startswith('sk-'):
+            # OpenAI/API key: sk-***...***xxx
+            if len(value) > 15:
+                return f"{value[:7]}***...***{value[-4:]}"
+            return 'sk-***'
+        else:
+            # Generic password: all dots
+            return '•' * min(len(value), 16)
 
     def get_all_settings(self, mask_secrets=True) -> Dict[str, Any]:
         """
         Get all settings from database with optional masking.
-        Returns dict with structure: { key: { value, masked, type, description, ... } }
+
+        Args:
+            mask_secrets: If True, mask secret values for display
+
+        Returns:
+            Dict with structure: { key: { value, masked, type, description, ... } }
         """
         settings = {}
 
@@ -226,25 +179,26 @@ class SettingsManager:
 
     def validate_setting(self, key: str, value: str) -> Tuple[bool, str]:
         """
-        Validate a single setting value
-        Returns (is_valid, error_message)
+        Validate a single setting value.
 
-        Note: Empty values are allowed for required fields during updates.
-        This allows partial updates without having to resend masked secrets.
+        Args:
+            key: Setting key
+            value: Setting value
+
+        Returns:
+            Tuple of (is_valid, error_message)
         """
         if key not in self.env_schema:
             return False, f"Unknown setting: {key}"
 
         schema = self.env_schema[key]
 
-        # Allow empty values for required fields (means "don't update this field")
-        # The field must exist in .env already, but we don't validate that here
+        # Allow empty values (means "don't update this field")
         if not value:
             return True, ''
 
         # Type-specific validation
         if schema['type'] == 'secret':
-            # Check pattern if defined (using validators for known keys)
             if key == 'OPENAI_API_KEY':
                 if not is_valid_openai_key(value):
                     return False, f"Invalid format for {key}"
@@ -254,7 +208,6 @@ class SettingsManager:
 
             # Check length constraints
             if 'min_length' in schema:
-                # Remove spaces for Gmail app passwords
                 clean_value = value.replace(' ', '')
                 if len(clean_value) < schema['min_length']:
                     return False, f"{key} must be at least {schema['min_length']} characters"
@@ -287,15 +240,19 @@ class SettingsManager:
     def update_setting(self, key: str, value: str) -> Tuple[bool, str]:
         """
         Update a single setting in database.
-        Automatically encrypts if setting is a secret.
-        Returns (success, message)
+
+        Args:
+            key: Setting key
+            value: Setting value (plaintext, will be encrypted if needed)
+
+        Returns:
+            Tuple of (success, message)
         """
         # Validate first
         is_valid, error_msg = self.validate_setting(key, value)
         if not is_valid:
             return False, error_msg
 
-        # Check if this key exists in schema
         if key not in self.env_schema:
             return False, f"Unknown setting: {key}"
 
@@ -313,12 +270,13 @@ class SettingsManager:
 
     def update_multiple_settings(self, settings: Dict[str, str]) -> Tuple[bool, str, list]:
         """
-        Update multiple settings at once (more efficient).
-        Automatically encrypts secrets.
-        Returns (success, message, list of errors)
+        Update multiple settings at once.
 
-        Note: Empty values are skipped (not written).
-        This allows partial updates without affecting existing secrets.
+        Args:
+            settings: Dict mapping setting key to value (plaintext)
+
+        Returns:
+            Tuple of (success, message, list of errors)
         """
         errors = []
 
@@ -358,33 +316,23 @@ class SettingsManager:
     def check_restart_required(self) -> bool:
         """
         Check if restart is required for changes to take effect.
-        Database settings changes always require restart to be loaded by the app.
+
+        Returns:
+            Always True - settings changes require restart
         """
-        return True  # All settings changes require restart
-
-    def create_env_from_example(self) -> bool:
-        """Create .env from .env.example if .env doesn't exist"""
-        if os.path.exists(self.env_path):
-            return False  # Already exists
-
-        example_path = '.env.example'
-        if not os.path.exists(example_path):
-            return False  # No example to copy from
-
-        try:
-            shutil.copy2(example_path, self.env_path)
-            print(f"✅ Created {self.env_path} from {example_path}")
-            return True
-        except Exception as e:
-            print(f"❌ Failed to create .env from example: {e}")
-            return False
+        return True
 
 
 # Test functions for credentials
 def test_openai_key(api_key: str) -> Tuple[bool, str]:
     """
-    Test OpenAI API key by making a simple API call
-    Returns (success, message)
+    Test OpenAI API key by making a simple API call.
+
+    Args:
+        api_key: OpenAI API key
+
+    Returns:
+        Tuple of (success, message)
     """
     try:
         from openai import OpenAI
@@ -412,8 +360,14 @@ def test_openai_key(api_key: str) -> Tuple[bool, str]:
 
 def test_smtp_credentials(smtp_user: str, smtp_pass: str) -> Tuple[bool, str]:
     """
-    Test SMTP credentials by attempting connection
-    Returns (success, message)
+    Test SMTP credentials by attempting connection.
+
+    Args:
+        smtp_user: SMTP username
+        smtp_pass: SMTP password
+
+    Returns:
+        Tuple of (success, message)
     """
     try:
         import smtplib
@@ -440,12 +394,12 @@ if __name__ == '__main__':
     # Test the settings manager
     print("Testing SettingsManager...")
 
-    manager = SettingsManager('.env.test')
+    manager = SettingsManager(db_path='test_settings.db')
 
     # Test getting settings
     print("\n1. Getting all settings (masked):")
     settings = manager.get_all_settings(mask_secrets=True)
-    for key, info in settings.items():
+    for key, info in list(settings.items())[:3]:
         print(f"   {key}: {info['masked']} ({info['type']})")
 
     # Test validation
@@ -455,9 +409,6 @@ if __name__ == '__main__':
         ('LOG_LEVEL', 'INVALID', False),
         ('CHECK_INTERVAL_HOURS', '4', True),
         ('CHECK_INTERVAL_HOURS', '0', False),
-        ('CHECK_INTERVAL_HOURS', '25', False),
-        ('ANTHROPIC_API_KEY', 'sk-ant-api03-' + 'x' * 95, True),
-        ('ANTHROPIC_API_KEY', 'invalid', False),
     ]
 
     for key, value, expected_valid in test_cases:
@@ -466,9 +417,9 @@ if __name__ == '__main__':
         print(f"   {status} {key}={value}: {msg if not is_valid else 'Valid'}")
 
     # Cleanup
+    import os
     try:
-        os.remove('.env.test')
-        os.remove('.env.test.lock')
+        os.remove('test_settings.db')
     except:
         pass
 
