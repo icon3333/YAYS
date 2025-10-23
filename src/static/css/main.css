@@ -941,6 +941,13 @@
             color: var(--grey-300);
         }
 
+        .manual-badge {
+            color: var(--grey-600);
+            font-weight: 500;
+            font-size: 11px;
+            font-style: italic;
+        }
+
         /* Mobile adjustments for channel cards */
         @media (max-width: 600px) {
             .channel-actions {

@@ -60,6 +60,7 @@ class VideoDatabase:
                     processing_status TEXT DEFAULT 'pending',
                     error_message TEXT,
                     email_sent BOOLEAN DEFAULT 0,
+                    source_type TEXT DEFAULT 'via_channel',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -80,7 +81,40 @@ class VideoDatabase:
                 ON videos(processing_status)
             """)
 
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_source_type
+                ON videos(source_type)
+            """)
+
             conn.commit()
+
+            # Run migration to add source_type column to existing databases
+            self._migrate_add_source_type()
+
+    def _migrate_add_source_type(self):
+        """Migration: Add source_type column to existing databases"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if source_type column exists
+            cursor.execute("PRAGMA table_info(videos)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'source_type' not in columns:
+                # Add the column with default value
+                cursor.execute("""
+                    ALTER TABLE videos
+                    ADD COLUMN source_type TEXT DEFAULT 'via_channel'
+                """)
+
+                # Update all existing videos to 'via_channel'
+                cursor.execute("""
+                    UPDATE videos
+                    SET source_type = 'via_channel'
+                    WHERE source_type IS NULL
+                """)
+
+                conn.commit()
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""
@@ -102,7 +136,8 @@ class VideoDatabase:
         summary_text: Optional[str] = None,
         processing_status: str = 'pending',
         error_message: Optional[str] = None,
-        email_sent: bool = False
+        email_sent: bool = False,
+        source_type: str = 'via_channel'
     ) -> bool:
         """
         Add a video to the database
@@ -116,10 +151,10 @@ class VideoDatabase:
             cursor.execute("""
                 INSERT INTO videos
                 (id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
-                 summary_length, summary_text, processing_status, error_message, email_sent)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 summary_length, summary_text, processing_status, error_message, email_sent, source_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (video_id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
-                  summary_length, summary_text, processing_status, error_message, int(email_sent)))
+                  summary_length, summary_text, processing_status, error_message, int(email_sent), source_type))
 
         return True
 
@@ -219,7 +254,8 @@ class VideoDatabase:
                     processed_date,
                     processing_status,
                     error_message,
-                    email_sent
+                    email_sent,
+                    source_type
                 FROM videos
             """
 
@@ -264,7 +300,8 @@ class VideoDatabase:
                     'processed_date_formatted': format_processed_date(row['processed_date']),
                     'processing_status': row['processing_status'],
                     'error_message': row['error_message'],
-                    'email_sent': bool(row['email_sent'])
+                    'email_sent': bool(row['email_sent']),
+                    'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
                 })
 
             return videos
@@ -332,42 +369,6 @@ class VideoDatabase:
                         migrated += 1
 
         return migrated
-
-
-    def cleanup_old_videos(self, days: int = 365, keep_minimum: int = 1000):
-        """
-        Remove videos older than specified days, keeping at least keep_minimum
-        Returns number of videos deleted
-        """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-
-            # Check total count first
-            cursor.execute("SELECT COUNT(*) as count FROM videos")
-            total = cursor.fetchone()['count']
-
-            if total <= keep_minimum:
-                return 0  # Don't delete if below minimum
-
-            # Delete old videos
-            cutoff_date = datetime.now() - timedelta(days=days)
-
-            cursor.execute("""
-                DELETE FROM videos
-                WHERE processed_date < ?
-                AND id NOT IN (
-                    SELECT id FROM videos
-                    ORDER BY processed_date DESC
-                    LIMIT ?
-                )
-            """, (cutoff_date.isoformat(), keep_minimum))
-
-            deleted = cursor.rowcount
-
-            # Vacuum to reclaim space
-            cursor.execute("VACUUM")
-
-            return deleted
 
     def update_video_processing(
         self,
@@ -442,7 +443,8 @@ class VideoDatabase:
                 'processing_status': row['processing_status'],
                 'error_message': row['error_message'],
                 'email_sent': bool(row['email_sent']),
-                'summary_length': row['summary_length']
+                'summary_length': row['summary_length'],
+                'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
             }
 
     def reset_video_status(self, video_id: str):
@@ -567,8 +569,8 @@ class VideoDatabase:
                         INSERT INTO videos
                         (id, channel_id, channel_name, title, duration_seconds, view_count,
                          upload_date, summary_length, summary_text, processing_status,
-                         error_message, email_sent, processed_date, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         error_message, email_sent, source_type, processed_date, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         video_id,
                         video.get('channel_id', ''),
@@ -582,6 +584,7 @@ class VideoDatabase:
                         video.get('processing_status', 'pending'),
                         video.get('error_message'),
                         int(video.get('email_sent', False)),
+                        video.get('source_type', 'via_channel'),
                         video.get('processed_date'),
                         video.get('created_at', datetime.now().isoformat())
                     ))

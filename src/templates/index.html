@@ -84,6 +84,34 @@
     <!-- TAB 2: FEED -->
     <div id="tab-feed" class="tab-content">
         <div class="settings-container">
+            <!-- Quick Add Video Section -->
+            <div class="settings-section">
+                <h3>⚡ Quick Add Video</h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">YouTube Video URL</label>
+                    <input
+                        type="text"
+                        id="singleVideoUrl"
+                        class="setting-input"
+                        placeholder="https://youtube.com/watch?v=..."
+                        autocomplete="off"
+                        autocapitalize="off"
+                        autocorrect="off"
+                    />
+                    <div class="setting-description">
+                        Paste any YouTube video URL to process it immediately
+                    </div>
+                </div>
+
+                <button id="addSingleVideoBtn" onclick="addSingleVideo()" style="width: 100%; padding: 16px; font-size: 15px;">
+                    Process Video
+                </button>
+
+                <!-- Status message for single video addition -->
+                <div id="singleVideoStatus" class="status"></div>
+            </div>
+
             <!-- Processed Videos Feed Section -->
             <div class="settings-section" id="feedSection">
                 <h3>🎬 Processed Videos (<span id="feedCount">0</span>)</h3>
