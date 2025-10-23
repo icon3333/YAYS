@@ -533,6 +533,13 @@
                 data.videos.forEach(video => {
                     const div = document.createElement('div');
                     div.className = 'video-item';
+
+                    // Add "• Manual" badge for manually added videos
+                    // Videos added via Quick Add Video feature show a visual indicator
+                    const manualBadge = video.source_type === 'via_manual'
+                        ? '<span class="meta-separator">•</span><span class="manual-badge">Manual</span>'
+                        : '';
+
                     div.innerHTML = `
                         <div class="video-header">
                             <div class="video-title" onclick="openYouTube('${escapeAttr(video.id)}')">
@@ -544,6 +551,7 @@
                         </div>
                         <div class="video-meta">
                             <span class="video-channel">${escapeHtml(video.channel_name)}</span>
+                            ${manualBadge}
                             <span class="meta-separator">•</span>
                             <span class="video-date">${escapeHtml(video.upload_date_formatted)}</span>
                             <span class="meta-separator">•</span>
@@ -1338,6 +1346,97 @@ Transcript: {transcript}`;
                 }, 3000);
             }
         }
+
+        // ============================================================================
+        // SINGLE VIDEO ADDITION
+        // ============================================================================
+
+        /**
+         * Add a single video manually via URL
+         *
+         * Process:
+         * 1. Validate URL input
+         * 2. Call backend API to add video
+         * 3. Handle success (clear input, reload feed)
+         * 4. Handle errors (show message)
+         *
+         * The video will be added to database with source_type='via_manual'
+         * and processed in background (transcript -> AI summary -> email)
+         */
+        async function addSingleVideo() {
+            const urlInput = document.getElementById('singleVideoUrl');
+            const addBtn = document.getElementById('addSingleVideoBtn');
+            const videoUrl = urlInput.value.trim();
+
+            if (!videoUrl) {
+                showSingleVideoStatus('Please enter a YouTube video URL', true);
+                return;
+            }
+
+            // Disable button and show loading state
+            addBtn.disabled = true;
+            addBtn.textContent = 'Processing...';
+
+            try {
+                const response = await fetch('/api/videos/add-single', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        video_url: videoUrl
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    // Success!
+                    showSingleVideoStatus(`✅ ${result.message}`, false);
+
+                    // Clear input
+                    urlInput.value = '';
+
+                    // Reload feed to show the new video (it will be in "processing" state)
+                    setTimeout(() => {
+                        loadVideoFeed(true);
+                    }, 1000);
+
+                } else {
+                    // Error from backend
+                    showSingleVideoStatus(`❌ ${result.detail || 'Failed to add video'}`, true);
+                }
+
+            } catch (error) {
+                console.error('Error adding single video:', error);
+                showSingleVideoStatus('❌ Network error. Please try again.', true);
+            } finally {
+                // Re-enable button
+                addBtn.disabled = false;
+                addBtn.textContent = 'Process Video';
+            }
+        }
+
+        /**
+         * Show status message for single video addition
+         *
+         * @param {string} msg - Message to display
+         * @param {boolean} isError - Whether this is an error message
+         */
+        function showSingleVideoStatus(msg, isError) {
+            const status = document.getElementById('singleVideoStatus');
+            status.textContent = msg;
+            status.className = isError ? 'status error show' : 'status show';
+            setTimeout(() => status.classList.remove('show'), isError ? 5000 : 3000);
+        }
+
+        // Keyboard shortcut for single video input
+        document.getElementById('singleVideoUrl').addEventListener('keypress', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addSingleVideo();
+            }
+        });
 
         // Keyboard shortcuts
         document.addEventListener('keydown', e => {

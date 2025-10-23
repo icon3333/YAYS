@@ -354,6 +354,23 @@ class CredentialTest(BaseModel):
     test_pass: Optional[str] = None   # For SMTP password
 
 
+class SingleVideoAdd(BaseModel):
+    """Model for adding a single video manually"""
+    video_url: str
+
+    @field_validator('video_url')
+    @classmethod
+    def validate_video_url(cls, url):
+        """Validate YouTube video URL format"""
+        if not url or len(url.strip()) < 5:
+            raise ValueError('Video URL is required')
+        # Basic validation - detailed parsing happens in the endpoint
+        url_lower = url.lower()
+        if 'youtube.com' not in url_lower and 'youtu.be' not in url_lower and len(url) != 11:
+            raise ValueError('Invalid YouTube URL format')
+        return url.strip()
+
+
 @app.get("/api/settings")
 async def get_settings():
     """Get all settings (with masked credentials)"""
@@ -1016,6 +1033,153 @@ async def process_videos_now():
     except Exception as e:
         logger.error(f"Error starting manual processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def extract_video_id_from_url(url: str) -> Optional[str]:
+    """
+    Extract video ID from various YouTube URL formats
+    Supports:
+    - https://www.youtube.com/watch?v=VIDEO_ID
+    - https://youtu.be/VIDEO_ID
+    - https://www.youtube.com/shorts/VIDEO_ID (will be rejected later if SKIP_SHORTS is true)
+    - VIDEO_ID (if exactly 11 characters)
+    """
+    url = url.strip()
+
+    # Direct video ID (11 characters, alphanumeric with dashes/underscores)
+    if len(url) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', url):
+        return url
+
+    # youtu.be/VIDEO_ID
+    match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
+    if match:
+        return match.group(1)
+
+    # youtube.com/watch?v=VIDEO_ID
+    match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+    if match:
+        return match.group(1)
+
+    # youtube.com/shorts/VIDEO_ID
+    match = re.search(r'/shorts/([a-zA-Z0-9_-]{11})', url)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+@app.post("/api/videos/add-single")
+async def add_single_video(data: SingleVideoAdd):
+    """
+    Add a single video manually by URL
+
+    Process:
+    1. Extract video ID from URL
+    2. Get video metadata (title, channel, duration, etc.)
+    3. Validate: not a short, not already processed
+    4. Add to database with source_type='via_manual'
+    5. Trigger background processing
+
+    Returns:
+    - Success: video details
+    - Error: error message
+    """
+    try:
+        # Extract video ID from URL
+        video_id = extract_video_id_from_url(data.video_url)
+
+        if not video_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract video ID from URL. Please provide a valid YouTube video URL."
+            )
+
+        logger.info(f"Adding single video manually: {video_id}")
+
+        # Check if already processed
+        if video_db.is_processed(video_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Video already processed. Check your feed for the existing summary."
+            )
+
+        # Get video metadata using ytdlp_client
+        metadata = ytdlp_client.get_video_metadata(video_id)
+
+        if not metadata:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not fetch video metadata. Please verify the video exists and is accessible."
+            )
+
+        # Extract metadata fields
+        title = metadata.get('title', f'Video {video_id}')
+        channel_id = metadata.get('channel_id', 'unknown')
+        channel_name = metadata.get('channel', 'Unknown Channel')
+        duration_seconds = metadata.get('duration', 0)
+        view_count = metadata.get('view_count', 0)
+        upload_date = metadata.get('upload_date_string') or metadata.get('upload_date')
+
+        # Convert YYYYMMDD to YYYY-MM-DD if needed
+        if upload_date and len(upload_date) == 8 and '-' not in upload_date:
+            upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+
+        # Check if it's a short (respect SKIP_SHORTS setting)
+        config = config_manager.read_config()
+        skip_shorts = config.get('settings', {}).get('SKIP_SHORTS', 'true').lower() == 'true'
+
+        if skip_shorts and duration_seconds and duration_seconds < 60:
+            raise HTTPException(
+                status_code=400,
+                detail=f"YouTube Shorts are not allowed (video is {duration_seconds}s long). Please add regular videos only."
+            )
+
+        # Add video to database with source_type='via_manual'
+        success = video_db.add_video(
+            video_id=video_id,
+            channel_id=channel_id,
+            title=title,
+            channel_name=channel_name,
+            duration_seconds=duration_seconds,
+            view_count=view_count,
+            upload_date=upload_date,
+            processing_status='pending',
+            source_type='via_manual'
+        )
+
+        if not success:
+            # This shouldn't happen since we checked above, but just in case
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to add video to database. It may already exist."
+            )
+
+        logger.info(f"Added manual video {video_id}: {title}")
+
+        # Trigger immediate background processing
+        try:
+            subprocess.Popen([sys.executable, 'process_videos.py'])
+            logger.info("Started background processing for manual video")
+        except Exception as e:
+            logger.error(f"Failed to start background processing: {e}")
+
+        return {
+            "status": "success",
+            "message": "Video added! Processing started in background.",
+            "video": {
+                "id": video_id,
+                "title": title,
+                "channel_name": channel_name,
+                "duration_formatted": metadata.get('duration_string', 'Unknown'),
+                "processing_status": "pending"
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding single video: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add video: {str(e)}")
 
 
 # ============================================================================
