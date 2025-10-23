@@ -941,6 +941,8 @@
             color: var(--grey-300);
         }
 
+        /* Manual badge for videos added via Quick Add Video feature */
+        /* Displays "Manual" next to channel name with subtle italic styling */
         .manual-badge {
             color: var(--grey-600);
             font-weight: 500;

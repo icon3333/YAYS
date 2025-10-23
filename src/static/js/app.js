@@ -531,6 +531,7 @@
                     div.className = 'video-item';
 
                     // Add "• Manual" badge for manually added videos
+                    // Videos added via Quick Add Video feature show a visual indicator
                     const manualBadge = video.source_type === 'via_manual'
                         ? '<span class="meta-separator">•</span><span class="manual-badge">Manual</span>'
                         : '';
@@ -1346,6 +1347,18 @@ Transcript: {transcript}`;
         // SINGLE VIDEO ADDITION
         // ============================================================================
 
+        /**
+         * Add a single video manually via URL
+         *
+         * Process:
+         * 1. Validate URL input
+         * 2. Call backend API to add video
+         * 3. Handle success (clear input, reload feed)
+         * 4. Handle errors (show message)
+         *
+         * The video will be added to database with source_type='via_manual'
+         * and processed in background (transcript -> AI summary -> email)
+         */
         async function addSingleVideo() {
             const urlInput = document.getElementById('singleVideoUrl');
             const addBtn = document.getElementById('addSingleVideoBtn');
@@ -1400,6 +1413,12 @@ Transcript: {transcript}`;
             }
         }
 
+        /**
+         * Show status message for single video addition
+         *
+         * @param {string} msg - Message to display
+         * @param {boolean} isError - Whether this is an error message
+         */
         function showSingleVideoStatus(msg, isError) {
             const status = document.getElementById('singleVideoStatus');
             status.textContent = msg;

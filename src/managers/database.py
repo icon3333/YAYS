@@ -92,22 +92,31 @@ class VideoDatabase:
             self._migrate_add_source_type()
 
     def _migrate_add_source_type(self):
-        """Migration: Add source_type column to existing databases"""
+        """
+        Migration: Add source_type column to existing databases
+
+        This migration safely adds the source_type column to track how videos
+        were added to the database:
+        - 'via_channel': Videos added automatically from channel monitoring
+        - 'via_manual': Videos added manually via Quick Add Video feature
+
+        Backward compatible: Sets all existing videos to 'via_channel'
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Check if source_type column exists
+            # Check if source_type column already exists
             cursor.execute("PRAGMA table_info(videos)")
             columns = [row[1] for row in cursor.fetchall()]
 
             if 'source_type' not in columns:
-                # Add the column with default value
+                # Add the column with default value for backward compatibility
                 cursor.execute("""
                     ALTER TABLE videos
                     ADD COLUMN source_type TEXT DEFAULT 'via_channel'
                 """)
 
-                # Update all existing videos to 'via_channel'
+                # Explicitly set all existing videos to 'via_channel' for clarity
                 cursor.execute("""
                     UPDATE videos
                     SET source_type = 'via_channel'
@@ -141,7 +150,24 @@ class VideoDatabase:
     ) -> bool:
         """
         Add a video to the database
-        Returns True if added, False if already exists
+
+        Args:
+            video_id: YouTube video ID (11 characters)
+            channel_id: YouTube channel ID
+            title: Video title
+            channel_name: Display name for the channel
+            duration_seconds: Video duration in seconds
+            view_count: Number of views
+            upload_date: Upload date in YYYY-MM-DD format
+            summary_length: Length of the generated summary
+            summary_text: The AI-generated summary text
+            processing_status: Current processing status (pending, processing, success, failed_*)
+            error_message: Error message if processing failed
+            email_sent: Whether summary email was sent successfully
+            source_type: How video was added ('via_channel' or 'via_manual')
+
+        Returns:
+            True if video was added successfully, False if already exists
         """
         if self.is_processed(video_id):
             return False
