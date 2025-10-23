@@ -83,9 +83,10 @@ class VideoDatabase:
 
             conn.commit()
 
-        # Run migration to add source_type column to existing databases
+        # Run migrations to add new tables/columns to existing databases
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
+        self._migrate_add_settings_table()
 
     def _migrate_add_source_type(self):
         """
@@ -126,6 +127,51 @@ class VideoDatabase:
                 CREATE INDEX IF NOT EXISTS idx_source_type
                 ON videos(source_type)
             """)
+
+            conn.commit()
+
+    def _migrate_add_settings_table(self):
+        """
+        Migration: Add settings table for database-backed configuration
+
+        This migration creates a settings table to store application settings
+        in the database instead of .env files, which are problematic in Docker.
+
+        Secrets (OPENAI_API_KEY, SMTP_PASS) remain in .env for security.
+        All other settings are stored in the database for reliability.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Create settings table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Initialize default settings if table is empty
+            cursor.execute("SELECT COUNT(*) FROM settings")
+            if cursor.fetchone()[0] == 0:
+                default_settings = [
+                    ('TARGET_EMAIL', '', 'email', 'Email address for receiving summaries'),
+                    ('SMTP_USER', '', 'email', 'Gmail SMTP username'),
+                    ('LOG_LEVEL', 'INFO', 'enum', 'Logging verbosity level'),
+                    ('CHECK_INTERVAL_HOURS', '4', 'integer', 'How often to check for new videos (hours)'),
+                    ('MAX_PROCESSED_ENTRIES', '10000', 'integer', 'Max video IDs to track before rotation'),
+                    ('SEND_EMAIL_SUMMARIES', 'true', 'enum', 'Send summaries via email'),
+                    ('OPENAI_MODEL', 'gpt-4o-mini', 'text', 'OpenAI model to use for summaries'),
+                ]
+
+                cursor.executemany(
+                    "INSERT INTO settings (key, value, type, description) VALUES (?, ?, ?, ?)",
+                    default_settings
+                )
 
             conn.commit()
 
@@ -629,6 +675,121 @@ class VideoDatabase:
             conn.commit()
 
         return inserted_count
+
+    # ========================
+    # Settings Management
+    # ========================
+
+    def get_setting(self, key: str) -> Optional[str]:
+        """
+        Get a single setting value from database.
+
+        Args:
+            key: Setting key
+
+        Returns:
+            Setting value or None if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def get_all_settings(self) -> Dict[str, Dict[str, str]]:
+        """
+        Get all settings from database.
+
+        Returns:
+            Dict mapping setting key to {value, type, description}
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT key, value, type, description
+                FROM settings
+                ORDER BY key
+            """)
+
+            settings = {}
+            for row in cursor.fetchall():
+                settings[row[0]] = {
+                    'value': row[1],
+                    'type': row[2],
+                    'description': row[3] or ''
+                }
+
+            return settings
+
+    def set_setting(self, key: str, value: str) -> bool:
+        """
+        Set a single setting value in database.
+
+        Args:
+            key: Setting key
+            value: Setting value
+
+        Returns:
+            True if successful
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO settings (key, value, type, description, updated_at)
+                VALUES (?, ?, 'text', '', CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+
+            conn.commit()
+            return True
+
+    def set_multiple_settings(self, settings: Dict[str, str]) -> int:
+        """
+        Set multiple settings at once.
+
+        Args:
+            settings: Dict mapping setting key to value
+
+        Returns:
+            Number of settings updated
+        """
+        updated_count = 0
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            for key, value in settings.items():
+                cursor.execute("""
+                    INSERT INTO settings (key, value, type, description, updated_at)
+                    VALUES (?, ?, 'text', '', CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (key, value))
+                updated_count += 1
+
+            conn.commit()
+
+        return updated_count
+
+    def delete_setting(self, key: str) -> bool:
+        """
+        Delete a setting from database.
+
+        Args:
+            key: Setting key
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+            conn.commit()
+            return cursor.rowcount > 0
 
 
 if __name__ == '__main__':

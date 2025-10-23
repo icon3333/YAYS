@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Settings Manager - Handles .env file operations with security
-Manages environment variables, masking, validation, and testing
+Settings Manager - Handles settings storage with database and .env
+Manages environment variables with database backing for non-secrets
 """
 
 import os
@@ -15,43 +15,61 @@ from src.utils.validators import is_valid_email, is_valid_openai_key
 
 
 class SettingsManager:
-    """Secure settings manager for .env file operations"""
+    """
+    Hybrid settings manager using database + .env
 
-    def __init__(self, env_path='.env', lock_timeout=10):
+    - Database: Stores non-secret settings (email addresses, model names, etc.)
+    - .env: Stores secrets only (API keys, passwords)
+
+    This approach eliminates Docker bind mount issues while keeping secrets secure.
+    """
+
+    def __init__(self, env_path='.env', db_path='data/videos.db', lock_timeout=10):
         self.env_path = env_path
         self.lock_timeout = lock_timeout
 
+        # Import here to avoid circular dependency
+        from src.managers.database import VideoDatabase
+        self.db = VideoDatabase(db_path)
+
         # Define all expected environment variables with their properties
+        # 'storage': 'env' for .env file (secrets), 'db' for database (non-secrets)
         self.env_schema = {
-            # Sensitive credentials (will be masked)
+            # Secrets stored in .env (sensitive credentials)
             'OPENAI_API_KEY': {
                 'type': 'secret',
+                'storage': 'env',
                 'required': True,
                 'pattern': r'^sk-[A-Za-z0-9_-]{20,}$',
                 'description': 'OpenAI API Key (for ChatGPT)'
             },
+            'SMTP_PASS': {
+                'type': 'secret',
+                'storage': 'env',
+                'required': True,
+                'min_length': 16,
+                'max_length': 16,
+                'description': 'Gmail app password (16 chars)'
+            },
+            # Non-secrets stored in database (safer for Docker)
             'TARGET_EMAIL': {
                 'type': 'email',
+                'storage': 'db',
                 'required': True,
                 'pattern': r'^[\w\.\-+]+@[\w\.\-]+\.\w+$',
                 'description': 'Email address for receiving summaries'
             },
             'SMTP_USER': {
                 'type': 'email',
+                'storage': 'db',
                 'required': True,
                 'pattern': r'^[\w\.\-+]+@[\w\.\-]+\.\w+$',
                 'description': 'Gmail SMTP username'
             },
-            'SMTP_PASS': {
-                'type': 'secret',
-                'required': True,
-                'min_length': 16,
-                'max_length': 16,
-                'description': 'Gmail app password (16 chars)'
-            },
-            # Application settings (safe to show)
+            # Application settings stored in database
             'LOG_LEVEL': {
                 'type': 'enum',
+                'storage': 'db',
                 'required': False,
                 'default': 'INFO',
                 'options': ['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -59,6 +77,7 @@ class SettingsManager:
             },
             'CHECK_INTERVAL_HOURS': {
                 'type': 'integer',
+                'storage': 'db',
                 'required': False,
                 'default': '4',
                 'min': 1,
@@ -67,6 +86,7 @@ class SettingsManager:
             },
             'MAX_PROCESSED_ENTRIES': {
                 'type': 'integer',
+                'storage': 'db',
                 'required': False,
                 'default': '10000',
                 'min': 100,
@@ -75,6 +95,7 @@ class SettingsManager:
             },
             'SEND_EMAIL_SUMMARIES': {
                 'type': 'enum',
+                'storage': 'db',
                 'required': False,
                 'default': 'true',
                 'options': ['true', 'false'],
@@ -82,6 +103,7 @@ class SettingsManager:
             },
             'OPENAI_MODEL': {
                 'type': 'text',
+                'storage': 'db',
                 'required': False,
                 'default': 'gpt-4o-mini',
                 'description': 'OpenAI model to use for summaries'
@@ -149,24 +171,35 @@ class SettingsManager:
 
     def get_all_settings(self, mask_secrets=True) -> Dict[str, Any]:
         """
-        Get all settings from .env with optional masking
+        Get all settings from database and .env with optional masking
         Returns dict with structure: { key: { value, masked, type, description, ... } }
         """
         settings = {}
 
         try:
+            # Get database settings
+            db_settings = self.db.get_all_settings()
+
+            # Get .env settings
             with locked_file(self.env_path, timeout=self.lock_timeout):
                 env_vars = self._parse_env_file()
 
             # Process each defined setting
             for key, schema in self.env_schema.items():
-                value = env_vars.get(key, schema.get('default', ''))
+                storage = schema.get('storage', 'env')
+
+                # Get value from appropriate storage
+                if storage == 'db':
+                    value = db_settings.get(key, {}).get('value', schema.get('default', ''))
+                else:  # storage == 'env'
+                    value = env_vars.get(key, schema.get('default', ''))
 
                 setting_info = {
                     'value': value,
                     'type': schema['type'],
                     'description': schema.get('description', ''),
-                    'required': schema.get('required', False)
+                    'required': schema.get('required', False),
+                    'storage': storage
                 }
 
                 # Add type-specific metadata
@@ -197,7 +230,8 @@ class SettingsManager:
                     'masked': '',
                     'type': schema['type'],
                     'description': schema.get('description', ''),
-                    'required': schema.get('required', False)
+                    'required': schema.get('required', False),
+                    'storage': schema.get('storage', 'env')
                 }
 
         return settings
@@ -264,7 +298,7 @@ class SettingsManager:
 
     def update_setting(self, key: str, value: str) -> Tuple[bool, str]:
         """
-        Update a single setting in .env file
+        Update a single setting in database or .env based on schema
         Returns (success, message)
         """
         # Validate first
@@ -272,22 +306,34 @@ class SettingsManager:
         if not is_valid:
             return False, error_msg
 
+        # Check if this key exists in schema
+        if key not in self.env_schema:
+            return False, f"Unknown setting: {key}"
+
+        storage = self.env_schema[key].get('storage', 'env')
+
         # Clean value (remove spaces from passwords)
         if key == 'SMTP_PASS':
             value = value.replace(' ', '')
 
         try:
-            with locked_file(self.env_path, timeout=self.lock_timeout):
-                # Read existing .env
-                env_vars = self._parse_env_file()
-
-                # Update value
-                env_vars[key] = value
-
-                # Write back to .env
-                self._write_env_file(env_vars)
-
+            if storage == 'db':
+                # Update in database
+                self.db.set_setting(key, value)
                 return True, f"Updated {key} successfully"
+            else:
+                # Update in .env file
+                with locked_file(self.env_path, timeout=self.lock_timeout):
+                    # Read existing .env
+                    env_vars = self._parse_env_file()
+
+                    # Update value
+                    env_vars[key] = value
+
+                    # Write back to .env
+                    self._write_env_file(env_vars)
+
+                    return True, f"Updated {key} successfully"
 
         except Exception as e:
             return False, f"Failed to update {key}: {str(e)}"
@@ -297,7 +343,7 @@ class SettingsManager:
         Update multiple settings at once (more efficient)
         Returns (success, message, list of errors)
 
-        Note: Empty values are skipped (not written to .env).
+        Note: Empty values are skipped (not written).
         This allows partial updates without affecting existing secrets.
         """
         errors = []
@@ -312,27 +358,51 @@ class SettingsManager:
             return False, "Validation failed", errors
 
         try:
-            with locked_file(self.env_path, timeout=self.lock_timeout):
-                # Read existing .env
-                env_vars = self._parse_env_file()
+            # Separate settings by storage type
+            db_settings = {}
+            env_settings = {}
 
-                # Update only non-empty values
-                updated_count = 0
-                for key, value in settings.items():
-                    if not value:
-                        # Skip empty values (means "don't update this field")
-                        continue
+            for key, value in settings.items():
+                if not value:
+                    # Skip empty values (means "don't update this field")
+                    continue
 
-                    # Clean value if needed
-                    if key == 'SMTP_PASS':
-                        value = value.replace(' ', '')
-                    env_vars[key] = value
-                    updated_count += 1
+                # Clean value if needed
+                if key == 'SMTP_PASS':
+                    value = value.replace(' ', '')
 
-                # Write back
-                self._write_env_file(env_vars)
+                # Route to appropriate storage
+                if key in self.env_schema:
+                    storage = self.env_schema[key].get('storage', 'env')
+                    if storage == 'db':
+                        db_settings[key] = value
+                    else:
+                        env_settings[key] = value
+                else:
+                    # Unknown keys go to .env for backward compatibility
+                    env_settings[key] = value
 
-                return True, f"Updated {updated_count} settings successfully", []
+            updated_count = 0
+
+            # Update database settings
+            if db_settings:
+                updated_count += self.db.set_multiple_settings(db_settings)
+
+            # Update .env settings
+            if env_settings:
+                with locked_file(self.env_path, timeout=self.lock_timeout):
+                    # Read existing .env
+                    env_vars = self._parse_env_file()
+
+                    # Update values
+                    for key, value in env_settings.items():
+                        env_vars[key] = value
+                        updated_count += 1
+
+                    # Write back
+                    self._write_env_file(env_vars)
+
+            return True, f"Updated {updated_count} settings successfully", []
 
         except Exception as e:
             return False, f"Failed to update settings: {str(e)}", []
