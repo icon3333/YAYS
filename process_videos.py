@@ -7,7 +7,6 @@ Main entry point for video summarization
 import os
 import sys
 import logging
-import re
 from datetime import datetime
 from time import sleep
 from typing import Dict
@@ -22,10 +21,18 @@ from src.core.youtube import YouTubeClient
 from src.core.transcript import TranscriptExtractor
 from src.core.ai_summarizer import AISummarizer
 from src.core.email_sender import EmailSender
+from src.core.constants import (
+    STATUS_PENDING, STATUS_PROCESSING, STATUS_SUCCESS,
+    STATUS_FAILED_TRANSCRIPT, STATUS_FAILED_AI, STATUS_FAILED_EMAIL,
+    RATE_LIMIT_DELAY
+)
 
 # Import managers
 from src.managers.config_manager import ConfigManager, ProcessedVideos
 from src.managers.database import VideoDatabase
+
+# Import utilities
+from src.utils.validators import is_valid_email
 
 
 # Configure structured logging
@@ -74,8 +81,6 @@ def setup_logging():
 class VideoProcessor:
     """Main video processing orchestrator"""
 
-    RATE_LIMIT_DELAY = 3  # Delay between API calls
-
     def __init__(self):
         """Initialize with config, credentials, and logging"""
         self.logger = setup_logging()
@@ -113,7 +118,7 @@ class VideoProcessor:
             sys.exit(1)
 
         # Validate email format
-        if not re.match(r'^[\w\.\-+]+@[\w\.\-]+\.\w+$', self.target_email):
+        if not is_valid_email(self.target_email):
             self.logger.error(f"Invalid TARGET_EMAIL format: {self.target_email}")
             sys.exit(1)
 
@@ -187,13 +192,13 @@ class VideoProcessor:
         # Check if video already exists in database
         if self.db.is_processed(video['id']):
             existing = self.db.get_video_by_id(video['id'])
-            if existing and existing.get('processing_status') != 'pending':
+            if existing and existing.get('processing_status') != STATUS_PENDING:
                 self.logger.debug(f"      Already processed: {existing.get('processing_status')}")
                 return False
 
         # Mark as processing
         if self.db.is_processed(video['id']):
-            self.db.update_video_processing(video['id'], 'processing')
+            self.db.update_video_processing(video['id'], STATUS_PROCESSING)
         else:
             self.db.add_video(
                 video_id=video['id'],
@@ -203,7 +208,7 @@ class VideoProcessor:
                 duration_seconds=video.get('duration_seconds'),
                 view_count=video.get('view_count'),
                 upload_date=video.get('upload_date'),
-                processing_status='processing'
+                processing_status=STATUS_PROCESSING
             )
 
         # STEP 1: Extract transcript
@@ -212,7 +217,7 @@ class VideoProcessor:
             self.logger.info(f"      ❌ No transcript available")
             self.db.update_video_processing(
                 video['id'],
-                status='failed_transcript',
+                status=STATUS_FAILED_TRANSCRIPT,
                 error_message='Transcript not available for this video'
             )
             self.processed.mark_processed(video['id'])
@@ -238,7 +243,7 @@ class VideoProcessor:
             self.logger.info(f"      ❌ AI summarization failed")
             self.db.update_video_processing(
                 video['id'],
-                status='failed_ai',
+                status=STATUS_FAILED_AI,
                 error_message='Failed to generate summary using OpenAI API'
             )
             self.processed.mark_processed(video['id'])
@@ -251,7 +256,7 @@ class VideoProcessor:
         # STEP 3: Save summary to database
         self.db.update_video_processing(
             video['id'],
-            status='success',
+            status=STATUS_SUCCESS,
             summary_text=summary,
             summary_length=len(summary)
         )
@@ -262,14 +267,14 @@ class VideoProcessor:
 
         if send_email:
             if self.email_sender.send_email(video, summary, channel_name):
-                self.db.update_video_processing(video['id'], status='success', email_sent=True)
+                self.db.update_video_processing(video['id'], status=STATUS_SUCCESS, email_sent=True)
                 self.stats['email_sent'] += 1
                 self.logger.info(f"      📧 Email sent")
             else:
                 # Email failed but summary is saved - mark as failed_email
                 self.db.update_video_processing(
                     video['id'],
-                    status='failed_email',
+                    status=STATUS_FAILED_EMAIL,
                     error_message='Summary generated but email delivery failed',
                     email_sent=False
                 )
@@ -283,7 +288,7 @@ class VideoProcessor:
         self.stats['videos_processed'] += 1
 
         # Rate limiting
-        sleep(self.RATE_LIMIT_DELAY)
+        sleep(RATE_LIMIT_DELAY)
         return True
 
     def run(self):
@@ -322,7 +327,7 @@ class VideoProcessor:
                 # Check database status - only process if pending or not in DB
                 if self.db.is_processed(video['id']):
                     existing = self.db.get_video_by_id(video['id'])
-                    if existing and existing.get('processing_status') not in ['pending', None]:
+                    if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
                         self.logger.debug(f"   Skipping {existing.get('processing_status')}: {video['title'][:40]}")
                         continue
 

@@ -8,23 +8,10 @@ import os
 import re
 import shutil
 from typing import Dict, Optional, Tuple, Any
-from contextlib import contextmanager
 from datetime import datetime
 
-# Use filelock for cross-platform file locking
-try:
-    from filelock import FileLock, Timeout
-except ImportError:
-    print("Warning: filelock not installed. File locking disabled.")
-    class FileLock:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-    class Timeout(Exception):
-        pass
+from src.utils.file_lock import locked_file
+from src.utils.validators import is_valid_email, is_valid_openai_key
 
 
 class SettingsManager:
@@ -32,7 +19,6 @@ class SettingsManager:
 
     def __init__(self, env_path='.env', lock_timeout=10):
         self.env_path = env_path
-        self.lock_path = f"{env_path}.lock"
         self.lock_timeout = lock_timeout
 
         # Define all expected environment variables with their properties
@@ -102,15 +88,6 @@ class SettingsManager:
             }
         }
 
-    @contextmanager
-    def _lock(self):
-        """Context manager for file locking"""
-        lock = FileLock(self.lock_path, timeout=self.lock_timeout)
-        try:
-            with lock:
-                yield
-        except Timeout:
-            raise TimeoutError(f"Could not acquire lock on {self.env_path}")
 
     def _mask_secret(self, value: str, secret_type: str = 'secret') -> str:
         """
@@ -178,7 +155,7 @@ class SettingsManager:
         settings = {}
 
         try:
-            with self._lock():
+            with locked_file(self.env_path, timeout=self.lock_timeout):
                 env_vars = self._parse_env_file()
 
             # Process each defined setting
@@ -245,8 +222,11 @@ class SettingsManager:
 
         # Type-specific validation
         if schema['type'] == 'secret':
-            # Check pattern if defined
-            if 'pattern' in schema:
+            # Check pattern if defined (using validators for known keys)
+            if key == 'OPENAI_API_KEY':
+                if not is_valid_openai_key(value):
+                    return False, f"Invalid format for {key}"
+            elif 'pattern' in schema:
                 if not re.match(schema['pattern'], value):
                     return False, f"Invalid format for {key}"
 
@@ -263,9 +243,8 @@ class SettingsManager:
                     return False, f"{key} must be at most {schema['max_length']} characters"
 
         elif schema['type'] == 'email':
-            if value and 'pattern' in schema:
-                if not re.match(schema['pattern'], value):
-                    return False, f"Invalid email format for {key}"
+            if value and not is_valid_email(value):
+                return False, f"Invalid email format for {key}"
 
         elif schema['type'] == 'enum':
             if value and value not in schema.get('options', []):
@@ -298,7 +277,7 @@ class SettingsManager:
             value = value.replace(' ', '')
 
         try:
-            with self._lock():
+            with locked_file(self.env_path, timeout=self.lock_timeout):
                 # Read existing .env
                 env_vars = self._parse_env_file()
 
@@ -333,7 +312,7 @@ class SettingsManager:
             return False, "Validation failed", errors
 
         try:
-            with self._lock():
+            with locked_file(self.env_path, timeout=self.lock_timeout):
                 # Read existing .env
                 env_vars = self._parse_env_file()
 
