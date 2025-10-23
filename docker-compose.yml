@@ -18,6 +18,8 @@ services:
     volumes:
       # Shared config (read/write with locking)
       - ./config.txt:/app/config.txt
+      # Environment variables (persistent, created from .env.example if missing)
+      - ./.env:/app/.env
       # Logs directory (persistent)
       - ./logs:/app/logs
     environment:
@@ -57,6 +59,8 @@ services:
     volumes:
       # Shared config (read-only for safety, but can still read)
       - ./config.txt:/app/config.txt
+      # Environment variables (persistent, settings saved in Web UI)
+      - ./.env:/app/.env
       # Data directory (persistent, stores processed videos)
       - ./data:/app/data
       # Logs directory (persistent)
