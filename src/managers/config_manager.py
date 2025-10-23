@@ -10,9 +10,6 @@ import time
 from typing import Dict, List, Tuple, Optional
 from contextlib import contextmanager
 
-# Import centralized backup manager
-from src.managers.backup_manager import BackupManager
-
 # Use filelock library for cross-platform file locking
 try:
     from filelock import FileLock, Timeout
@@ -31,15 +28,12 @@ except ImportError:
 
 
 class ConfigManager:
-    """Thread-safe configuration manager with file locking and centralized backups"""
+    """Thread-safe configuration manager with file locking"""
 
     def __init__(self, config_path='config.txt', lock_timeout=10):
         self.config_path = config_path
         self.lock_path = f"{config_path}.lock"
         self.lock_timeout = lock_timeout
-
-        # Use centralized backup manager
-        self.backup_manager = BackupManager()
 
     @contextmanager
     def _lock(self):
@@ -228,10 +222,6 @@ MAX_VIDEOS_PER_CHANNEL=5
 
         try:
             with self._lock():
-                # Create backup before modification using centralized backup manager
-                if os.path.exists(self.config_path):
-                    self.backup_manager.create_backup(self.config_path, 'config')
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -295,10 +285,6 @@ MAX_VIDEOS_PER_CHANNEL=5
             return False
         except Exception as e:
             print(f"❌ Error writing config: {e}")
-            # Try to restore from latest backup
-            latest_backup = self.backup_manager.get_latest_backup('config', os.path.basename(self.config_path))
-            if latest_backup:
-                self.backup_manager.restore_backup(latest_backup, self.config_path)
             return False
 
     def get_channels(self) -> Tuple[List[str], Dict[str, str]]:
@@ -352,10 +338,6 @@ MAX_VIDEOS_PER_CHANNEL=5
         """Update the AI prompt template"""
         try:
             with self._lock():
-                # Create backup using centralized backup manager
-                if os.path.exists(self.config_path):
-                    self.backup_manager.create_backup(self.config_path, 'config')
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -420,21 +402,16 @@ Transcript: {transcript}"""
         config = self.read_config()
         return config.get('settings', {})
 
-    def set_setting(self, key: str, value: str, create_backup: bool = True) -> bool:
+    def set_setting(self, key: str, value: str) -> bool:
         """
         Update a single setting
 
         Args:
             key: Setting key to update
             value: New value
-            create_backup: Whether to create a backup (default: True, set False for batch operations)
         """
         try:
             with self._lock():
-                # Create backup using centralized backup manager (optional for batch operations)
-                if create_backup and os.path.exists(self.config_path):
-                    self.backup_manager.create_backup(self.config_path, 'config')
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -482,10 +459,6 @@ Transcript: {transcript}"""
 
         try:
             with self._lock():
-                # Create backup using centralized backup manager
-                if os.path.exists(self.config_path):
-                    self.backup_manager.create_backup(self.config_path, 'config')
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
