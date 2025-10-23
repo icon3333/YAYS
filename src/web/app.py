@@ -442,13 +442,18 @@ async def update_settings(data: MultipleSettingsUpdate):
 
             # Use config_manager.set_setting() for thread-safe updates with locking and backup
             try:
+                # Create ONE backup before updating all config settings (efficiency)
+                if os.path.exists('config.txt'):
+                    config_manager.backup_manager.create_backup('config.txt', 'config')
+
                 updated_count = 0
                 for key, value in config_updates.items():
                     # Skip empty values (partial update support)
                     if not value:
                         continue
 
-                    success = config_manager.set_setting(key, value)
+                    # Skip backup on individual calls since we already backed up once above
+                    success = config_manager.set_setting(key, value, create_backup=False)
                     if success:
                         updated_count += 1
                     else:

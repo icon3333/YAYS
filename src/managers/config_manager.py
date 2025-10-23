@@ -420,12 +420,19 @@ Transcript: {transcript}"""
         config = self.read_config()
         return config.get('settings', {})
 
-    def set_setting(self, key: str, value: str) -> bool:
-        """Update a single setting"""
+    def set_setting(self, key: str, value: str, create_backup: bool = True) -> bool:
+        """
+        Update a single setting
+
+        Args:
+            key: Setting key to update
+            value: New value
+            create_backup: Whether to create a backup (default: True, set False for batch operations)
+        """
         try:
             with self._lock():
-                # Create backup using centralized backup manager
-                if os.path.exists(self.config_path):
+                # Create backup using centralized backup manager (optional for batch operations)
+                if create_backup and os.path.exists(self.config_path):
                     self.backup_manager.create_backup(self.config_path, 'config')
 
                 # Read existing config
