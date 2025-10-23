@@ -457,31 +457,15 @@
             }
         }
 
-        // Show status - supports two calling patterns:
-        // showStatus(msg, isError) - uses default 'status' element
-        // showStatus(elementId, msg, type) - uses specified element with type 'success'/'error'
-        function showStatus(msgOrElementId, isErrorOrMsg, typeOrUndefined) {
-            let status, message, className;
-
-            if (arguments.length === 2) {
-                // Old pattern: showStatus(msg, isError)
-                status = document.getElementById('status');
-                message = msgOrElementId;
-                className = isErrorOrMsg ? 'status error show' : 'status show';
-            } else {
-                // New pattern: showStatus(elementId, msg, type)
-                status = document.getElementById(msgOrElementId);
-                message = isErrorOrMsg;
-                className = typeOrUndefined === 'error' ? 'status error show' : 'status show';
-            }
-
+        // Show status message in global status bar
+        function showStatus(message, isError) {
+            const status = document.getElementById('status');
             if (!status) {
-                console.error('Status element not found:', msgOrElementId);
+                console.error('Global status element not found');
                 return;
             }
-
             status.textContent = message;
-            status.className = className;
+            status.className = isError ? 'status error show' : 'status show';
             setTimeout(() => status.classList.remove('show'), 3000);
         }
 
@@ -1401,11 +1385,11 @@ Transcript: {transcript}`;
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
 
-                showStatus('settingsStatus', `Export successful! File downloaded: ${a.download}`, 'success');
+                showStatus(`Export successful! File downloaded: ${a.download}`, false);
 
             } catch (error) {
                 console.error('Export error:', error);
-                showStatus('settingsStatus', `Export failed: ${error.message}`, 'error');
+                showStatus(`Export failed: ${error.message}`, true);
             } finally {
                 setTimeout(() => {
                     btn.disabled = false;
@@ -1444,11 +1428,11 @@ Transcript: {transcript}`;
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
 
-                showStatus('settingsStatus', `Backup successful! File downloaded: ${a.download}`, 'success');
+                showStatus(`Backup successful! File downloaded: ${a.download}`, false);
 
             } catch (error) {
                 console.error('Export error:', error);
-                showStatus('settingsStatus', `Export failed: ${error.message}`, 'error');
+                showStatus(`Export failed: ${error.message}`, true);
             } finally {
                 setTimeout(() => {
                     btn.disabled = false;
@@ -1509,7 +1493,7 @@ Transcript: {transcript}`;
         async function handleFile(file) {
             // Check file type
             if (!file.name.endsWith('.json')) {
-                showStatus('settingsStatus', 'Invalid file type. Please select a JSON file.', 'error');
+                showStatus('Invalid file type. Please select a JSON file.', true);
                 return;
             }
 
@@ -1573,7 +1557,7 @@ Transcript: {transcript}`;
                 console.error('Validation error:', error);
                 document.getElementById('dropzoneValidating').textContent = '✗ Validation error';
                 document.getElementById('dropzoneValidating').style.color = '#ef4444';
-                showStatus('settingsStatus', `Validation failed: ${error.message}`, 'error');
+                showStatus(`Validation failed: ${error.message}`, true);
             }
         }
 
@@ -1650,7 +1634,7 @@ Transcript: {transcript}`;
         // Execute import
         async function executeImport() {
             if (!selectedImportFile) {
-                showStatus('settingsStatus', 'No file selected', 'error');
+                showStatus('No file selected', true);
                 return;
             }
 
@@ -1674,7 +1658,7 @@ Transcript: {transcript}`;
 
                 if (result.success) {
                     const message = `Import successful! Added ${result.channels_added} channels, ${result.videos_added} videos, updated ${result.settings_updated} settings.`;
-                    showStatus('settingsStatus', message, 'success');
+                    showStatus(message, false);
 
                     // Reset import UI
                     cancelImport();
@@ -1691,12 +1675,12 @@ Transcript: {transcript}`;
 
                 } else {
                     const errors = result.errors.join('; ');
-                    showStatus('settingsStatus', `Import failed: ${errors}`, 'error');
+                    showStatus(`Import failed: ${errors}`, true);
                 }
 
             } catch (error) {
                 console.error('Import error:', error);
-                showStatus('settingsStatus', `Import failed: ${error.message}`, 'error');
+                showStatus(`Import failed: ${error.message}`, true);
             } finally {
                 btn.disabled = false;
                 btn.textContent = originalText;
