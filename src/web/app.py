@@ -33,6 +33,16 @@ if not os.path.exists('.env') and os.path.exists('.env.example'):
 
 load_dotenv()
 
+# Setup logging with dynamic log level from environment
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('web')
+logger.info(f"Web app starting with log level: {log_level}")
+
 # Import shared modules
 from src.managers.config_manager import ConfigManager
 from src.managers.settings_manager import SettingsManager, test_openai_key, test_smtp_credentials
@@ -42,14 +52,6 @@ from src.managers.export_manager import ExportManager
 from src.managers.import_manager import ImportManager
 from src.core.ytdlp_client import YTDLPClient
 from src.core.youtube import YouTubeClient
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger('web')
 
 app = FastAPI(
     title="YAYS - Yet Another Youtube Summarizer",
@@ -491,39 +493,15 @@ async def get_prompt():
 async def update_prompt(data: PromptUpdate):
     """Update the prompt template"""
     try:
-        # Read current config
-        with open('config.txt', 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        # Validate prompt
+        if not data.prompt or len(data.prompt.strip()) < 10:
+            raise HTTPException(status_code=400, detail="Prompt must be at least 10 characters")
 
-        new_lines = []
-        in_prompt = False
-        prompt_written = False
+        # Use config_manager for thread-safe update with locking and backup
+        success = config_manager.set_prompt(data.prompt)
 
-        for line in lines:
-            stripped = line.strip()
-
-            if stripped == '[PROMPT]':
-                in_prompt = True
-                new_lines.append(line)
-                # Write the new prompt
-                new_lines.append(data.prompt)
-                new_lines.append('\n\n')
-                prompt_written = True
-                continue
-
-            if in_prompt:
-                # Skip old prompt lines until next section
-                if stripped.startswith('['):
-                    in_prompt = False
-                    new_lines.append(line)
-                else:
-                    pass  # Skip old prompt content
-            else:
-                new_lines.append(line)
-
-        # Write back
-        with open('config.txt', 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update prompt")
 
         logger.info("Updated prompt template")
 
@@ -533,6 +511,8 @@ async def update_prompt(data: PromptUpdate):
             "restart_required": False
         }
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.warning(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
