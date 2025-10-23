@@ -134,46 +134,154 @@ class VideoDatabase:
         """
         Migration: Add settings table for database-backed configuration
 
-        This migration creates a settings table to store application settings
-        in the database instead of .env files, which are problematic in Docker.
+        This migration creates a settings table to store ALL application settings
+        in the database, including encrypted secrets. No more .env file writes!
 
-        Secrets (OPENAI_API_KEY, SMTP_PASS) remain in .env for security.
-        All other settings are stored in the database for reliability.
+        Secrets are encrypted at rest using Fernet symmetric encryption.
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Create settings table
+            # Create settings table with encrypted flag
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     type TEXT NOT NULL,
+                    encrypted BOOLEAN DEFAULT 0,
                     description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
+            # Check if we need to add encrypted column to existing table
+            cursor.execute("PRAGMA table_info(settings)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'encrypted' not in columns:
+                cursor.execute("""
+                    ALTER TABLE settings
+                    ADD COLUMN encrypted BOOLEAN DEFAULT 0
+                """)
+
             # Initialize default settings if table is empty
             cursor.execute("SELECT COUNT(*) FROM settings")
             if cursor.fetchone()[0] == 0:
+                # Note: Secrets start empty, users must configure them
                 default_settings = [
-                    ('TARGET_EMAIL', '', 'email', 'Email address for receiving summaries'),
-                    ('SMTP_USER', '', 'email', 'Gmail SMTP username'),
-                    ('LOG_LEVEL', 'INFO', 'enum', 'Logging verbosity level'),
-                    ('CHECK_INTERVAL_HOURS', '4', 'integer', 'How often to check for new videos (hours)'),
-                    ('MAX_PROCESSED_ENTRIES', '10000', 'integer', 'Max video IDs to track before rotation'),
-                    ('SEND_EMAIL_SUMMARIES', 'true', 'enum', 'Send summaries via email'),
-                    ('OPENAI_MODEL', 'gpt-4o-mini', 'text', 'OpenAI model to use for summaries'),
+                    ('OPENAI_API_KEY', '', 'secret', 1, 'OpenAI API Key (encrypted)'),
+                    ('SMTP_PASS', '', 'secret', 1, 'Gmail app password (encrypted)'),
+                    ('TARGET_EMAIL', '', 'email', 0, 'Email address for receiving summaries'),
+                    ('SMTP_USER', '', 'email', 0, 'Gmail SMTP username'),
+                    ('LOG_LEVEL', 'INFO', 'enum', 0, 'Logging verbosity level'),
+                    ('CHECK_INTERVAL_HOURS', '4', 'integer', 0, 'How often to check for new videos (hours)'),
+                    ('MAX_PROCESSED_ENTRIES', '10000', 'integer', 0, 'Max video IDs to track before rotation'),
+                    ('SEND_EMAIL_SUMMARIES', 'true', 'enum', 0, 'Send summaries via email'),
+                    ('OPENAI_MODEL', 'gpt-4o-mini', 'text', 0, 'OpenAI model to use for summaries'),
                 ]
 
                 cursor.executemany(
-                    "INSERT INTO settings (key, value, type, description) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO settings (key, value, type, encrypted, description) VALUES (?, ?, ?, ?, ?)",
                     default_settings
                 )
 
             conn.commit()
+
+        # Run migration to import .env settings if they exist
+        self._migrate_import_env_to_db()
+
+    def _migrate_import_env_to_db(self):
+        """
+        Migration: Import existing .env settings to database (one-time)
+
+        This migration reads .env file and imports all settings to database.
+        Secrets are encrypted before storage.
+        Only runs if settings are still empty (hasn't been migrated yet).
+        """
+        import os
+        from src.utils.encryption import get_encryption
+
+        env_path = '.env'
+        if not os.path.exists(env_path):
+            return  # No .env file to migrate
+
+        # Check if migration already happened (any non-empty settings)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM settings WHERE value != ''")
+            if cursor.fetchone()[0] > 0:
+                return  # Already migrated
+
+            # Parse .env file
+            env_vars = {}
+            try:
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"').strip("'")
+                            env_vars[key] = value
+            except Exception as e:
+                print(f"⚠️ Failed to parse .env for migration: {e}")
+                return
+
+            if not env_vars:
+                return  # Nothing to migrate
+
+            # Get encryption instance
+            enc = get_encryption()
+
+            # Define which keys should be encrypted
+            encrypted_keys = {'OPENAI_API_KEY', 'SMTP_PASS'}
+
+            # Import settings to database
+            imported = 0
+            for key, value in env_vars.items():
+                if not value:
+                    continue  # Skip empty values
+
+                try:
+                    # Check if this key exists in settings table
+                    cursor.execute("SELECT encrypted FROM settings WHERE key = ?", (key,))
+                    row = cursor.fetchone()
+
+                    if row is not None:
+                        # Update existing setting
+                        should_encrypt = row[0] or (key in encrypted_keys)
+
+                        if should_encrypt:
+                            # Encrypt the value
+                            encrypted_value = enc.encrypt(value)
+                            cursor.execute("""
+                                UPDATE settings
+                                SET value = ?, encrypted = 1, updated_at = CURRENT_TIMESTAMP
+                                WHERE key = ?
+                            """, (encrypted_value, key))
+                        else:
+                            # Store plaintext
+                            cursor.execute("""
+                                UPDATE settings
+                                SET value = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE key = ?
+                            """, (value, key))
+
+                        imported += 1
+
+                except Exception as e:
+                    print(f"⚠️ Failed to migrate setting {key}: {e}")
+                    continue
+
+            conn.commit()
+
+            if imported > 0:
+                print(f"✅ Migrated {imported} settings from .env to database")
+                print(f"   Secrets are now encrypted in database")
+                print(f"   .env file is no longer needed for runtime (but kept for backup)")
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""
@@ -683,92 +791,154 @@ class VideoDatabase:
     def get_setting(self, key: str) -> Optional[str]:
         """
         Get a single setting value from database.
+        Automatically decrypts if value is encrypted.
 
         Args:
             key: Setting key
 
         Returns:
-            Setting value or None if not found
+            Decrypted setting value or None if not found
         """
+        from src.utils.encryption import get_encryption
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            cursor.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
             row = cursor.fetchone()
-            return row[0] if row else None
+
+            if not row:
+                return None
+
+            value, encrypted = row[0], row[1]
+
+            # Decrypt if needed
+            if encrypted:
+                enc = get_encryption()
+                return enc.decrypt(value)
+            else:
+                return value
 
     def get_all_settings(self) -> Dict[str, Dict[str, str]]:
         """
         Get all settings from database.
+        Automatically decrypts encrypted values.
 
         Returns:
-            Dict mapping setting key to {value, type, description}
+            Dict mapping setting key to {value, type, description, encrypted}
         """
+        from src.utils.encryption import get_encryption
+
+        enc = get_encryption()
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT key, value, type, description
+                SELECT key, value, type, encrypted, description
                 FROM settings
                 ORDER BY key
             """)
 
             settings = {}
             for row in cursor.fetchall():
-                settings[row[0]] = {
-                    'value': row[1],
-                    'type': row[2],
-                    'description': row[3] or ''
+                key, value, type_, encrypted, description = row
+
+                # Decrypt if needed
+                if encrypted:
+                    value = enc.decrypt(value)
+
+                settings[key] = {
+                    'value': value,
+                    'type': type_,
+                    'description': description or '',
+                    'encrypted': bool(encrypted)
                 }
 
             return settings
 
-    def set_setting(self, key: str, value: str) -> bool:
+    def set_setting(self, key: str, value: str, encrypt: Optional[bool] = None) -> bool:
         """
         Set a single setting value in database.
+        Automatically encrypts if setting is marked as secret.
 
         Args:
             key: Setting key
-            value: Setting value
+            value: Setting value (plaintext)
+            encrypt: Force encryption (None = auto-detect based on existing setting)
 
         Returns:
             True if successful
         """
+        from src.utils.encryption import get_encryption
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            # Check if setting exists and should be encrypted
+            cursor.execute("SELECT encrypted FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+
+            should_encrypt = encrypt if encrypt is not None else (row[0] if row else False)
+
+            # Encrypt if needed
+            if should_encrypt:
+                enc = get_encryption()
+                value = enc.encrypt(value)
+
             cursor.execute("""
-                INSERT INTO settings (key, value, type, description, updated_at)
-                VALUES (?, ?, 'text', '', CURRENT_TIMESTAMP)
+                INSERT INTO settings (key, value, type, encrypted, description, updated_at)
+                VALUES (?, ?, 'text', ?, '', CURRENT_TIMESTAMP)
                 ON CONFLICT(key) DO UPDATE SET
                     value = excluded.value,
+                    encrypted = excluded.encrypted,
                     updated_at = CURRENT_TIMESTAMP
-            """, (key, value))
+            """, (key, value, int(should_encrypt)))
 
             conn.commit()
             return True
 
-    def set_multiple_settings(self, settings: Dict[str, str]) -> int:
+    def set_multiple_settings(self, settings: Dict[str, str], encrypt_keys: Optional[set] = None) -> int:
         """
         Set multiple settings at once.
+        Automatically encrypts values marked as secrets.
 
         Args:
-            settings: Dict mapping setting key to value
+            settings: Dict mapping setting key to value (plaintext)
+            encrypt_keys: Set of keys to encrypt (None = auto-detect)
 
         Returns:
             Number of settings updated
         """
+        from src.utils.encryption import get_encryption
+
+        enc = get_encryption()
         updated_count = 0
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            # Get existing encryption flags
+            cursor.execute("SELECT key, encrypted FROM settings")
+            existing_encryption = {row[0]: bool(row[1]) for row in cursor.fetchall()}
+
             for key, value in settings.items():
+                # Determine if should encrypt
+                should_encrypt = False
+                if encrypt_keys and key in encrypt_keys:
+                    should_encrypt = True
+                elif key in existing_encryption:
+                    should_encrypt = existing_encryption[key]
+
+                # Encrypt if needed
+                final_value = enc.encrypt(value) if should_encrypt else value
+
                 cursor.execute("""
-                    INSERT INTO settings (key, value, type, description, updated_at)
-                    VALUES (?, ?, 'text', '', CURRENT_TIMESTAMP)
+                    INSERT INTO settings (key, value, type, encrypted, description, updated_at)
+                    VALUES (?, ?, 'text', ?, '', CURRENT_TIMESTAMP)
                     ON CONFLICT(key) DO UPDATE SET
                         value = excluded.value,
+                        encrypted = excluded.encrypted,
                         updated_at = CURRENT_TIMESTAMP
-                """, (key, value))
+                """, (key, final_value, int(should_encrypt)))
                 updated_count += 1
 
             conn.commit()
