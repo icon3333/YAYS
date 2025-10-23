@@ -1,35 +1,63 @@
 #!/usr/bin/env python3
 """
-Settings Manager - Handles .env file operations with security
-Manages environment variables, masking, validation, and testing
+Settings Manager - Handles settings storage in database with encryption
+All settings stored in SQLite database with automatic encryption for secrets
 """
 
 import os
 import re
-import shutil
 from typing import Dict, Optional, Tuple, Any
-from datetime import datetime
 
-from src.utils.file_lock import locked_file
 from src.utils.validators import is_valid_email, is_valid_openai_key
 
 
 class SettingsManager:
-    """Secure settings manager for .env file operations"""
+    """
+    Database-only settings manager with encryption
 
-    def __init__(self, env_path='.env', lock_timeout=10):
-        self.env_path = env_path
-        self.lock_timeout = lock_timeout
+    ALL settings are stored in the database:
+    - Secrets (API keys, passwords) are encrypted at rest
+    - Non-secrets (emails, config) are stored in plaintext
+    - No more .env file writes!
+    - Automatic migration from .env on first run
 
-        # Define all expected environment variables with their properties
+    This completely eliminates Docker bind mount issues.
+    """
+
+    def __init__(self, env_path='.env', db_path='data/videos.db', lock_timeout=10):
+        """
+        Initialize SettingsManager.
+
+        Args:
+            env_path: Path to .env (used only for initial migration, never written)
+            db_path: Path to SQLite database
+            lock_timeout: Unused (kept for backward compatibility)
+        """
+        self.env_path = env_path  # Read-only, never written
+        self.db_path = db_path
+
+        # Import here to avoid circular dependency
+        from src.managers.database import VideoDatabase
+        self.db = VideoDatabase(db_path)
+
+        # Define all expected settings with their properties
+        # All settings are now stored in database (secrets are encrypted)
         self.env_schema = {
-            # Sensitive credentials (will be masked)
+            # Secrets (encrypted in database)
             'OPENAI_API_KEY': {
                 'type': 'secret',
                 'required': True,
                 'pattern': r'^sk-[A-Za-z0-9_-]{20,}$',
                 'description': 'OpenAI API Key (for ChatGPT)'
             },
+            'SMTP_PASS': {
+                'type': 'secret',
+                'required': True,
+                'min_length': 16,
+                'max_length': 16,
+                'description': 'Gmail app password (16 chars)'
+            },
+            # Non-secrets (plaintext in database)
             'TARGET_EMAIL': {
                 'type': 'email',
                 'required': True,
@@ -42,14 +70,7 @@ class SettingsManager:
                 'pattern': r'^[\w\.\-+]+@[\w\.\-]+\.\w+$',
                 'description': 'Gmail SMTP username'
             },
-            'SMTP_PASS': {
-                'type': 'secret',
-                'required': True,
-                'min_length': 16,
-                'max_length': 16,
-                'description': 'Gmail app password (16 chars)'
-            },
-            # Application settings (safe to show)
+            # Application settings
             'LOG_LEVEL': {
                 'type': 'enum',
                 'required': False,
@@ -149,18 +170,19 @@ class SettingsManager:
 
     def get_all_settings(self, mask_secrets=True) -> Dict[str, Any]:
         """
-        Get all settings from .env with optional masking
+        Get all settings from database with optional masking.
         Returns dict with structure: { key: { value, masked, type, description, ... } }
         """
         settings = {}
 
         try:
-            with locked_file(self.env_path, timeout=self.lock_timeout):
-                env_vars = self._parse_env_file()
+            # Get all settings from database (automatically decrypted)
+            db_settings = self.db.get_all_settings()
 
             # Process each defined setting
             for key, schema in self.env_schema.items():
-                value = env_vars.get(key, schema.get('default', ''))
+                # Get value from database or use default
+                value = db_settings.get(key, {}).get('value', schema.get('default', ''))
 
                 setting_info = {
                     'value': value,
@@ -264,7 +286,8 @@ class SettingsManager:
 
     def update_setting(self, key: str, value: str) -> Tuple[bool, str]:
         """
-        Update a single setting in .env file
+        Update a single setting in database.
+        Automatically encrypts if setting is a secret.
         Returns (success, message)
         """
         # Validate first
@@ -272,32 +295,29 @@ class SettingsManager:
         if not is_valid:
             return False, error_msg
 
+        # Check if this key exists in schema
+        if key not in self.env_schema:
+            return False, f"Unknown setting: {key}"
+
         # Clean value (remove spaces from passwords)
         if key == 'SMTP_PASS':
             value = value.replace(' ', '')
 
         try:
-            with locked_file(self.env_path, timeout=self.lock_timeout):
-                # Read existing .env
-                env_vars = self._parse_env_file()
-
-                # Update value
-                env_vars[key] = value
-
-                # Write back to .env
-                self._write_env_file(env_vars)
-
-                return True, f"Updated {key} successfully"
+            # Update in database (encryption handled automatically)
+            self.db.set_setting(key, value)
+            return True, f"Updated {key} successfully"
 
         except Exception as e:
             return False, f"Failed to update {key}: {str(e)}"
 
     def update_multiple_settings(self, settings: Dict[str, str]) -> Tuple[bool, str, list]:
         """
-        Update multiple settings at once (more efficient)
+        Update multiple settings at once (more efficient).
+        Automatically encrypts secrets.
         Returns (success, message, list of errors)
 
-        Note: Empty values are skipped (not written to .env).
+        Note: Empty values are skipped (not written).
         This allows partial updates without affecting existing secrets.
         """
         errors = []
@@ -312,85 +332,35 @@ class SettingsManager:
             return False, "Validation failed", errors
 
         try:
-            with locked_file(self.env_path, timeout=self.lock_timeout):
-                # Read existing .env
-                env_vars = self._parse_env_file()
+            # Filter out empty values and clean passwords
+            non_empty_settings = {}
+            for key, value in settings.items():
+                if not value:
+                    continue  # Skip empty values
 
-                # Update only non-empty values
-                updated_count = 0
-                for key, value in settings.items():
-                    if not value:
-                        # Skip empty values (means "don't update this field")
-                        continue
+                # Clean value if needed
+                if key == 'SMTP_PASS':
+                    value = value.replace(' ', '')
 
-                    # Clean value if needed
-                    if key == 'SMTP_PASS':
-                        value = value.replace(' ', '')
-                    env_vars[key] = value
-                    updated_count += 1
+                non_empty_settings[key] = value
 
-                # Write back
-                self._write_env_file(env_vars)
+            if not non_empty_settings:
+                return True, "No settings to update", []
 
-                return True, f"Updated {updated_count} settings successfully", []
+            # Update all settings in database (encryption handled automatically)
+            updated_count = self.db.set_multiple_settings(non_empty_settings)
+
+            return True, f"Updated {updated_count} settings successfully", []
 
         except Exception as e:
             return False, f"Failed to update settings: {str(e)}", []
 
-    def _write_env_file(self, env_vars: Dict[str, str]):
-        """Write environment variables to .env file with comments preserved"""
-        # Read original file to preserve comments and structure
-        original_lines = []
-        if os.path.exists(self.env_path):
-            with open(self.env_path, 'r', encoding='utf-8') as f:
-                original_lines = f.readlines()
-
-        # Track which keys we've written
-        written_keys = set()
-        new_lines = []
-
-        # Process original file, replacing values where found
-        for line in original_lines:
-            stripped = line.strip()
-
-            # Keep comments and empty lines
-            if not stripped or stripped.startswith('#'):
-                new_lines.append(line)
-                continue
-
-            # Parse key=value lines
-            if '=' in stripped:
-                key = stripped.split('=', 1)[0].strip()
-
-                if key in env_vars:
-                    # Replace with new value
-                    new_lines.append(f"{key}={env_vars[key]}\n")
-                    written_keys.add(key)
-                else:
-                    # Keep original line
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-
-        # Add any new keys that weren't in the original file
-        for key, value in env_vars.items():
-            if key not in written_keys:
-                new_lines.append(f"\n# Added by Settings Manager - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                new_lines.append(f"{key}={value}\n")
-
-        # Write atomically (temp file + rename)
-        temp_path = f"{self.env_path}.tmp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
-
-        os.replace(temp_path, self.env_path)
-
     def check_restart_required(self) -> bool:
         """
-        Check if restart is required for changes to take effect
-        .env changes always require restart
+        Check if restart is required for changes to take effect.
+        Database settings changes always require restart to be loaded by the app.
         """
-        return True  # All .env changes require restart
+        return True  # All settings changes require restart
 
     def create_env_from_example(self) -> bool:
         """Create .env from .env.example if .env doesn't exist"""

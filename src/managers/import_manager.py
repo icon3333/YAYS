@@ -126,7 +126,7 @@ class ImportManager:
         """
         self.db = VideoDatabase(db_path)
         self.config_manager = ConfigManager(config_path)
-        self.settings_manager = SettingsManager(env_path)
+        self.settings_manager = SettingsManager(env_path, db_path)
 
     def validate_import_file(self, data: Dict[str, Any]) -> ValidationResult:
         """

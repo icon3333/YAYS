@@ -63,7 +63,7 @@ class ExportManager:
         """
         self.db = VideoDatabase(db_path)
         self.config_manager = ConfigManager(config_path)
-        self.settings_manager = SettingsManager(env_path)
+        self.settings_manager = SettingsManager(env_path, db_path)
 
     def export_feed_json(self) -> Dict[str, Any]:
         """
