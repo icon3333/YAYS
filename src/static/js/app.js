@@ -885,6 +885,10 @@
 
         function showSettingsStatus(msg, isError, autoHide = true) {
             const status = document.getElementById('settingsStatus');
+            if (!status) {
+                console.warn('settingsStatus element not found');
+                return;
+            }
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
             if (autoHide) {
@@ -894,6 +898,10 @@
 
         function showAdvancedStatus(msg, isError) {
             const status = document.getElementById('advancedStatus');
+            if (!status) {
+                console.warn('advancedStatus element not found');
+                return;
+            }
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
             setTimeout(() => status.classList.remove('show'), 5000);
@@ -1117,6 +1125,10 @@ Transcript: {transcript}`;
 
         function showAIStatus(msg, isError) {
             const status = document.getElementById('aiStatus');
+            if (!status) {
+                console.warn('aiStatus element not found');
+                return;
+            }
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
             setTimeout(() => status.classList.remove('show'), 5000);
@@ -1477,6 +1489,10 @@ Transcript: {transcript}`;
          */
         function showSingleVideoStatus(msg, isError) {
             const status = document.getElementById('singleVideoStatus');
+            if (!status) {
+                console.warn('singleVideoStatus element not found');
+                return;
+            }
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
             setTimeout(() => status.classList.remove('show'), isError ? 5000 : 3000);
