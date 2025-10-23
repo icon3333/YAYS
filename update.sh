@@ -6,9 +6,11 @@ set -e  # Exit on error
 echo "🔄 Updating YAYS to latest version..."
 echo ""
 
-# Stop containers and remove volumes
+# Stop containers (preserve data volumes)
+# IMPORTANT: Do NOT use -v flag here, as it can delete bind mount data
+# including database (data/), config (config.txt), and .env settings
 echo "📦 Stopping containers..."
-docker compose down -v
+docker compose down
 
 # Discard local changes and pull latest
 echo "⬇️  Pulling latest code from GitHub..."
