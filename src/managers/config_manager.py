@@ -34,7 +34,6 @@ class ConfigManager:
         self.config_path = config_path
         self.lock_path = f"{config_path}.lock"
         self.lock_timeout = lock_timeout
-        self.backup_path = f"{config_path}.backup"
 
     @contextmanager
     def _lock(self):
@@ -223,13 +222,6 @@ MAX_VIDEOS_PER_CHANNEL=5
 
         try:
             with self._lock():
-                # Create backup before modification
-                if os.path.exists(self.config_path):
-                    with open(self.config_path, 'r', encoding='utf-8') as f:
-                        backup_content = f.read()
-                    with open(self.backup_path, 'w', encoding='utf-8') as f:
-                        f.write(backup_content)
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -293,16 +285,6 @@ MAX_VIDEOS_PER_CHANNEL=5
             return False
         except Exception as e:
             print(f"❌ Error writing config: {e}")
-            # Try to restore from backup
-            if os.path.exists(self.backup_path):
-                try:
-                    with open(self.backup_path, 'r', encoding='utf-8') as f:
-                        backup = f.read()
-                    with open(self.config_path, 'w', encoding='utf-8') as f:
-                        f.write(backup)
-                    print("✅ Restored config from backup")
-                except:
-                    pass
             return False
 
     def get_channels(self) -> Tuple[List[str], Dict[str, str]]:
@@ -356,13 +338,6 @@ MAX_VIDEOS_PER_CHANNEL=5
         """Update the AI prompt template"""
         try:
             with self._lock():
-                # Create backup
-                if os.path.exists(self.config_path):
-                    with open(self.config_path, 'r', encoding='utf-8') as f:
-                        backup_content = f.read()
-                    with open(self.backup_path, 'w', encoding='utf-8') as f:
-                        f.write(backup_content)
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -428,16 +403,15 @@ Transcript: {transcript}"""
         return config.get('settings', {})
 
     def set_setting(self, key: str, value: str) -> bool:
-        """Update a single setting"""
+        """
+        Update a single setting
+
+        Args:
+            key: Setting key to update
+            value: New value
+        """
         try:
             with self._lock():
-                # Create backup
-                if os.path.exists(self.config_path):
-                    with open(self.config_path, 'r', encoding='utf-8') as f:
-                        backup_content = f.read()
-                    with open(self.backup_path, 'w', encoding='utf-8') as f:
-                        f.write(backup_content)
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -485,13 +459,6 @@ Transcript: {transcript}"""
 
         try:
             with self._lock():
-                # Create backup
-                if os.path.exists(self.config_path):
-                    with open(self.config_path, 'r', encoding='utf-8') as f:
-                        backup_content = f.read()
-                    with open(self.backup_path, 'w', encoding='utf-8') as f:
-                        f.write(backup_content)
-
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()

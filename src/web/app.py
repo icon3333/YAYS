@@ -33,6 +33,16 @@ if not os.path.exists('.env') and os.path.exists('.env.example'):
 
 load_dotenv()
 
+# Setup logging with dynamic log level from environment
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('web')
+logger.info(f"Web app starting with log level: {log_level}")
+
 # Import shared modules
 from src.managers.config_manager import ConfigManager
 from src.managers.settings_manager import SettingsManager, test_openai_key, test_smtp_credentials
@@ -42,14 +52,6 @@ from src.managers.export_manager import ExportManager
 from src.managers.import_manager import ImportManager
 from src.core.ytdlp_client import YTDLPClient
 from src.core.youtube import YouTubeClient
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger('web')
 
 app = FastAPI(
     title="YAYS - Yet Another Youtube Summarizer",
@@ -414,60 +416,45 @@ async def update_settings(data: MultipleSettingsUpdate):
 
         # Update config.txt settings
         if config_updates:
-            config = config_manager.read_config()
-            current_settings = config.get('settings', {})
-            current_settings.update(config_updates)
+            # Validate config settings before writing
+            validation_errors = []
 
-            # Write back to config (preserving channels and prompt)
-            config_manager.config = config
-            config_manager.config['settings'] = current_settings
+            for key, value in config_updates.items():
+                if key == 'SUMMARY_LENGTH':
+                    if value and not value.isdigit():
+                        validation_errors.append(f"SUMMARY_LENGTH must be a number")
+                    elif value and (int(value) < 100 or int(value) > 10000):
+                        validation_errors.append(f"SUMMARY_LENGTH must be between 100 and 10000")
 
-            # We need to update the config.txt file manually
-            # Read the file and update the [SETTINGS] section
+                elif key == 'MAX_VIDEOS_PER_CHANNEL':
+                    if value and not value.isdigit():
+                        validation_errors.append(f"MAX_VIDEOS_PER_CHANNEL must be a number")
+                    elif value and (int(value) < 1 or int(value) > 50):
+                        validation_errors.append(f"MAX_VIDEOS_PER_CHANNEL must be between 1 and 50")
+
+                elif key in ['USE_SUMMARY_LENGTH', 'SKIP_SHORTS']:
+                    if value and value not in ['true', 'false']:
+                        validation_errors.append(f"{key} must be 'true' or 'false'")
+
+            if validation_errors:
+                logger.error(f"Config validation failed: {validation_errors}")
+                raise HTTPException(status_code=400, detail={"message": "Validation failed", "errors": validation_errors})
+
+            # Use config_manager.set_setting() for thread-safe updates with locking
             try:
-                with open('config.txt', 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                new_lines = []
-                in_settings = False
-
-                for line in lines:
-                    stripped = line.strip()
-
-                    if stripped == '[SETTINGS]':
-                        in_settings = True
-                        new_lines.append(line)
-                        # Add comment
-                        new_lines.append("# Maximum length of summary in tokens (affects cost)\n")
-                        new_lines.append(f"SUMMARY_LENGTH={config_updates.get('SUMMARY_LENGTH', current_settings.get('SUMMARY_LENGTH', '500'))}\n")
-                        new_lines.append("\n# Enable/disable summary length limit (true/false)\n")
-                        new_lines.append(f"USE_SUMMARY_LENGTH={config_updates.get('USE_SUMMARY_LENGTH', current_settings.get('USE_SUMMARY_LENGTH', 'false'))}\n")
-                        new_lines.append("\n# Skip YouTube Shorts videos (true/false)\n")
-                        new_lines.append(f"SKIP_SHORTS={config_updates.get('SKIP_SHORTS', current_settings.get('SKIP_SHORTS', 'true'))}\n")
-                        new_lines.append("\n# Maximum videos to check per channel\n")
-                        new_lines.append(f"MAX_VIDEOS_PER_CHANNEL={config_updates.get('MAX_VIDEOS_PER_CHANNEL', current_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))}\n")
+                updated_count = 0
+                for key, value in config_updates.items():
+                    # Skip empty values (partial update support)
+                    if not value:
                         continue
 
-                    if in_settings:
-                        # Skip old settings lines
-                        if stripped.startswith('['):
-                            in_settings = False
-                            new_lines.append(line)
-                        elif not stripped or stripped.startswith('#'):
-                            # Skip comments and empty lines in settings section
-                            pass
-                        elif '=' not in stripped:
-                            pass  # Skip malformed lines
-                        else:
-                            pass  # Skip old key=value lines (we already wrote them)
+                    success = config_manager.set_setting(key, value)
+                    if success:
+                        updated_count += 1
                     else:
-                        new_lines.append(line)
+                        logger.warning(f"Failed to update config setting: {key}")
 
-                # Write back
-                with open('config.txt', 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-
-                results["config"] = f"Updated {len(config_updates)} config settings"
+                results["config"] = f"Updated {updated_count} config settings"
                 logger.info(f"Updated config.txt settings: {list(config_updates.keys())}")
 
             except Exception as e:
@@ -506,39 +493,15 @@ async def get_prompt():
 async def update_prompt(data: PromptUpdate):
     """Update the prompt template"""
     try:
-        # Read current config
-        with open('config.txt', 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        # Validate prompt
+        if not data.prompt or len(data.prompt.strip()) < 10:
+            raise HTTPException(status_code=400, detail="Prompt must be at least 10 characters")
 
-        new_lines = []
-        in_prompt = False
-        prompt_written = False
+        # Use config_manager for thread-safe update with locking and backup
+        success = config_manager.set_prompt(data.prompt)
 
-        for line in lines:
-            stripped = line.strip()
-
-            if stripped == '[PROMPT]':
-                in_prompt = True
-                new_lines.append(line)
-                # Write the new prompt
-                new_lines.append(data.prompt)
-                new_lines.append('\n\n')
-                prompt_written = True
-                continue
-
-            if in_prompt:
-                # Skip old prompt lines until next section
-                if stripped.startswith('['):
-                    in_prompt = False
-                    new_lines.append(line)
-                else:
-                    pass  # Skip old prompt content
-            else:
-                new_lines.append(line)
-
-        # Write back
-        with open('config.txt', 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update prompt")
 
         logger.info("Updated prompt template")
 
@@ -548,6 +511,8 @@ async def update_prompt(data: PromptUpdate):
             "restart_required": False
         }
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.warning(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))

@@ -23,6 +23,16 @@ echo "📌 Updated to:"
 git log --oneline -3
 echo ""
 
+# Ensure .env exists (create from example if needed)
+if [ ! -f .env ]; then
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        echo "⚠️  Created .env from .env.example - Please configure your settings in the Web UI"
+    else
+        echo "❌ Warning: .env.example not found. You'll need to configure settings in the Web UI."
+    fi
+fi
+
 # Rebuild without cache and pull latest base images
 echo "🔨 Rebuilding containers (this takes ~60 seconds)..."
 docker compose build --no-cache --pull

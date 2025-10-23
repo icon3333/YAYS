@@ -3,13 +3,11 @@
 
 # Environment and secrets
 .env
-.env.backup
 *.env
 !.env.example
 
 # Configuration (contains personal channel list)
 config.txt
-config.txt.backup
 !config.txt.example
 *.lock
 
@@ -23,10 +21,7 @@ logs/
 *.log
 
 # Backups (created by deploy.sh)
-.backups/
-backup_*/
 *.tar.gz
-*.backup.*
 
 # Python
 __pycache__/

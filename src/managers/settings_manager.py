@@ -33,7 +33,6 @@ class SettingsManager:
     def __init__(self, env_path='.env', lock_timeout=10):
         self.env_path = env_path
         self.lock_path = f"{env_path}.lock"
-        self.backup_path = f"{env_path}.backup"
         self.lock_timeout = lock_timeout
 
         # Define all expected environment variables with their properties
@@ -300,10 +299,6 @@ class SettingsManager:
 
         try:
             with self._lock():
-                # Create backup
-                if os.path.exists(self.env_path):
-                    shutil.copy2(self.env_path, self.backup_path)
-
                 # Read existing .env
                 env_vars = self._parse_env_file()
 
@@ -316,14 +311,6 @@ class SettingsManager:
                 return True, f"Updated {key} successfully"
 
         except Exception as e:
-            # Try to restore from backup
-            if os.path.exists(self.backup_path):
-                try:
-                    shutil.copy2(self.backup_path, self.env_path)
-                    print("✅ Restored .env from backup")
-                except:
-                    pass
-
             return False, f"Failed to update {key}: {str(e)}"
 
     def update_multiple_settings(self, settings: Dict[str, str]) -> Tuple[bool, str, list]:
@@ -347,10 +334,6 @@ class SettingsManager:
 
         try:
             with self._lock():
-                # Create backup
-                if os.path.exists(self.env_path):
-                    shutil.copy2(self.env_path, self.backup_path)
-
                 # Read existing .env
                 env_vars = self._parse_env_file()
 
@@ -373,14 +356,6 @@ class SettingsManager:
                 return True, f"Updated {updated_count} settings successfully", []
 
         except Exception as e:
-            # Try to restore from backup
-            if os.path.exists(self.backup_path):
-                try:
-                    shutil.copy2(self.backup_path, self.env_path)
-                    print("✅ Restored .env from backup")
-                except:
-                    pass
-
             return False, f"Failed to update settings: {str(e)}", []
 
     def _write_env_file(self, env_vars: Dict[str, str]):

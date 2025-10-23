@@ -859,33 +859,46 @@
             try {
                 const settingsToSave = {};
 
-                // Get all .env settings
-                settingsToSave['TARGET_EMAIL'] = document.getElementById('TARGET_EMAIL').value;
-                settingsToSave['SMTP_USER'] = document.getElementById('SMTP_USER').value;
+                // Get all .env settings (only include non-empty values)
+                const targetEmail = document.getElementById('TARGET_EMAIL').value.trim();
+                if (targetEmail) settingsToSave['TARGET_EMAIL'] = targetEmail;
+
+                const smtpUser = document.getElementById('SMTP_USER').value.trim();
+                if (smtpUser) settingsToSave['SMTP_USER'] = smtpUser;
+
                 settingsToSave['LOG_LEVEL'] = document.getElementById('LOG_LEVEL').value;
-                settingsToSave['CHECK_INTERVAL_HOURS'] = document.getElementById('CHECK_INTERVAL_HOURS').value;
-                settingsToSave['MAX_PROCESSED_ENTRIES'] = document.getElementById('MAX_PROCESSED_ENTRIES').value;
+
+                const checkInterval = document.getElementById('CHECK_INTERVAL_HOURS').value.trim();
+                if (checkInterval) settingsToSave['CHECK_INTERVAL_HOURS'] = checkInterval;
+
+                const maxProcessed = document.getElementById('MAX_PROCESSED_ENTRIES').value.trim();
+                if (maxProcessed) settingsToSave['MAX_PROCESSED_ENTRIES'] = maxProcessed;
+
                 settingsToSave['SEND_EMAIL_SUMMARIES'] = document.getElementById('SEND_EMAIL_SUMMARIES').value;
                 settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
                 // Get password fields (only save if they have new values, not masked values)
-                const openaiKey = document.getElementById('OPENAI_API_KEY').value;
+                const openaiKey = document.getElementById('OPENAI_API_KEY').value.trim();
                 // Don't save if it's the masked value or empty
                 if (openaiKey && !openaiKey.includes('***')) {
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
                 }
 
-                const smtpPass = document.getElementById('SMTP_PASS').value;
+                const smtpPass = document.getElementById('SMTP_PASS').value.trim();
                 // Don't save if it's masked (dots) or empty
                 if (smtpPass && !smtpPass.includes('•')) {
                     settingsToSave['SMTP_PASS'] = smtpPass;
                 }
 
-                // Get config settings
-                settingsToSave['SUMMARY_LENGTH'] = document.getElementById('SUMMARY_LENGTH').value;
+                // Get config settings (only include non-empty values)
+                const summaryLength = document.getElementById('SUMMARY_LENGTH').value.trim();
+                if (summaryLength) settingsToSave['SUMMARY_LENGTH'] = summaryLength;
+
                 settingsToSave['USE_SUMMARY_LENGTH'] = document.getElementById('USE_SUMMARY_LENGTH').checked ? 'true' : 'false';
                 settingsToSave['SKIP_SHORTS'] = document.getElementById('SKIP_SHORTS').checked ? 'true' : 'false';
-                settingsToSave['MAX_VIDEOS_PER_CHANNEL'] = document.getElementById('MAX_VIDEOS_PER_CHANNEL').value;
+
+                const maxVideos = document.getElementById('MAX_VIDEOS_PER_CHANNEL').value.trim();
+                if (maxVideos) settingsToSave['MAX_VIDEOS_PER_CHANNEL'] = maxVideos;
 
                 const response = await fetch('/api/settings', {
                     method: 'POST',
@@ -1131,7 +1144,7 @@ Transcript: {transcript}`;
                 settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
                 // Get API key if changed (don't save masked values)
-                const openaiKey = document.getElementById('OPENAI_API_KEY').value;
+                const openaiKey = document.getElementById('OPENAI_API_KEY').value.trim();
                 // Don't save if it's the masked value or empty
                 if (openaiKey && !openaiKey.includes('***')) {
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
