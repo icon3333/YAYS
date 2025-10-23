@@ -469,6 +469,38 @@
             setTimeout(() => status.classList.remove('show'), 3000);
         }
 
+        // ============================================================================
+        // SAVE CONFIRMATION HELPER
+        // ============================================================================
+
+        /**
+         * Show save confirmation in a button
+         * Temporarily changes button text to show "✓ Saved!" and restores it after delay
+         *
+         * @param {HTMLElement} button - The button element to update
+         * @param {string} confirmText - Text to show on success (default: "✓ Saved!")
+         * @param {number} duration - How long to show confirmation in ms (default: 2000)
+         */
+        function showButtonConfirmation(button, confirmText = '✓ Saved!', duration = 2000) {
+            if (!button) return;
+
+            // Store original state
+            const originalText = button.textContent;
+            const wasDisabled = button.disabled;
+
+            // Show confirmation
+            button.textContent = confirmText;
+            button.disabled = true;
+            button.style.backgroundColor = '#16a34a'; // Green background
+
+            // Restore original state after duration
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = wasDisabled;
+                button.style.backgroundColor = ''; // Reset to default
+            }, duration);
+        }
+
         // Video feed functions
         let feedRefreshInterval = null;
 
@@ -867,7 +899,9 @@
             setTimeout(() => status.classList.remove('show'), 5000);
         }
 
-        async function saveAllSettings() {
+        async function saveAllSettings(event) {
+            const button = event ? event.target : null;
+
             try {
                 const settingsToSave = {};
 
@@ -924,6 +958,11 @@
                 }
 
                 const result = await response.json();
+
+                // Show confirmation in button
+                if (button) {
+                    showButtonConfirmation(button, '✓ Saved!');
+                }
 
                 showSettingsStatus('✅ Settings saved successfully', false);
 
@@ -1108,7 +1147,8 @@ Transcript: {transcript}`;
             }
         }
 
-        async function savePrompt() {
+        async function savePrompt(event) {
+            const button = event ? event.target : null;
             const prompt = document.getElementById('promptEditor').value.trim();
 
             if (!prompt) {
@@ -1133,6 +1173,11 @@ Transcript: {transcript}`;
                     throw new Error(error.detail || 'Failed to save');
                 }
 
+                // Show confirmation in button
+                if (button) {
+                    showButtonConfirmation(button, '✓ Saved!');
+                }
+
                 showAIStatus('✅ Prompt saved successfully', false);
 
             } catch (error) {
@@ -1148,7 +1193,9 @@ Transcript: {transcript}`;
             }
         }
 
-        async function saveAICredentials() {
+        async function saveAICredentials(event) {
+            const button = event ? event.target : null;
+
             try {
                 const settingsToSave = {};
 
@@ -1171,6 +1218,11 @@ Transcript: {transcript}`;
                 if (!response.ok) {
                     const error = await response.json();
                     throw new Error(error.detail?.message || 'Failed to save');
+                }
+
+                // Show confirmation in button
+                if (button) {
+                    showButtonConfirmation(button, '✓ Saved!');
                 }
 
                 // Show success message in dedicated status box
