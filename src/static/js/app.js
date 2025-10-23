@@ -457,11 +457,31 @@
             }
         }
 
-        // Show status
-        function showStatus(msg, isError) {
-            const status = document.getElementById('status');
-            status.textContent = msg;
-            status.className = isError ? 'status error show' : 'status show';
+        // Show status - supports two calling patterns:
+        // showStatus(msg, isError) - uses default 'status' element
+        // showStatus(elementId, msg, type) - uses specified element with type 'success'/'error'
+        function showStatus(msgOrElementId, isErrorOrMsg, typeOrUndefined) {
+            let status, message, className;
+
+            if (arguments.length === 2) {
+                // Old pattern: showStatus(msg, isError)
+                status = document.getElementById('status');
+                message = msgOrElementId;
+                className = isErrorOrMsg ? 'status error show' : 'status show';
+            } else {
+                // New pattern: showStatus(elementId, msg, type)
+                status = document.getElementById(msgOrElementId);
+                message = isErrorOrMsg;
+                className = typeOrUndefined === 'error' ? 'status error show' : 'status show';
+            }
+
+            if (!status) {
+                console.error('Status element not found:', msgOrElementId);
+                return;
+            }
+
+            status.textContent = message;
+            status.className = className;
             setTimeout(() => status.classList.remove('show'), 3000);
         }
 
