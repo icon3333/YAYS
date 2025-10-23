@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
 """
-Shared Configuration Manager
-Handles all config.txt reading/writing with file locking and validation
+Configuration Manager - Database-backed configuration
+All config stored in SQLite database (channels, settings, prompt)
 """
 
 import os
-import re
-import time
 from typing import Dict, List, Tuple, Optional
 
-from src.utils.file_lock import locked_file
 from src.utils.validators import is_valid_channel_id
 
 
 class ConfigManager:
-    """Thread-safe configuration manager with file locking"""
+    """Database-backed configuration manager. No more config.txt writes!"""
 
-    def __init__(self, config_path='config.txt', lock_timeout=10):
-        self.config_path = config_path
-        self.lock_timeout = lock_timeout
+    def __init__(self, config_path='config.txt', db_path='data/videos.db'):
+        """
+        Initialize ConfigManager.
+
+        Args:
+            config_path: Path to config.txt (read-only, used for migration only)
+            db_path: Path to SQLite database
+        """
+        self.config_path = config_path  # Read-only, never written
+        self.db_path = db_path
+
+        # Import here to avoid circular dependency
+        from src.managers.database import VideoDatabase
+        self.db = VideoDatabase(db_path)
 
     def ensure_config_exists(self):
         """Create default config if it doesn't exist"""
@@ -254,96 +262,46 @@ MAX_VIDEOS_PER_CHANNEL=5
             return False
 
     def get_channels(self) -> Tuple[List[str], Dict[str, str]]:
-        """Convenience method to get just channels and names"""
-        config = self.read_config()
-        return config['channels'], config['channel_names']
+        """Get enabled channels from database"""
+        return self.db.get_enabled_channels()
 
     def add_channel(self, channel_id: str, channel_name: str = None) -> bool:
-        """Add a single channel to the config"""
-        channels, names = self.get_channels()
-
+        """Add a single channel to database"""
         # Validate
         if not self._is_valid_channel_id(channel_id):
             print(f"❌ Invalid channel ID: {channel_id}")
             return False
 
-        # Avoid duplicates
-        if channel_id in channels:
+        result = self.db.add_channel(channel_id, channel_name or channel_id)
+
+        if not result:
             print(f"⚠️ Channel already exists: {channel_id}")
-            return False
 
-        channels.append(channel_id)
-        names[channel_id] = channel_name or channel_id
-
-        return self.write_config(channels, names)
+        return result
 
     def remove_channel(self, channel_id: str) -> bool:
-        """Remove a single channel from the config"""
-        channels, names = self.get_channels()
+        """Remove a single channel from database"""
+        result = self.db.remove_channel(channel_id)
 
-        if channel_id not in channels:
+        if not result:
             print(f"⚠️ Channel not found: {channel_id}")
-            return False
 
-        channels.remove(channel_id)
-        names.pop(channel_id, None)
-
-        return self.write_config(channels, names)
+        return result
 
     def set_channels(self, channels: List[str], channel_names: Optional[Dict[str, str]] = None) -> bool:
-        """Set channels list (replaces existing channels)"""
+        """Set channels list (replaces existing channels in database)"""
         names = channel_names or {}
-        return self.write_config(channels, names)
+        return self.db.set_channels(channels, names)
 
     def get_prompt(self) -> str:
-        """Get the current AI prompt template"""
-        config = self.read_config()
-        return config.get('prompt', '')
+        """Get the current AI prompt template from database"""
+        return self.db.get_setting('ai_prompt_template') or ''
 
     def set_prompt(self, prompt: str) -> bool:
-        """Update the AI prompt template"""
+        """Update the AI prompt template in database"""
         try:
-            with locked_file(self.config_path, timeout=self.lock_timeout):
-                # Read existing config
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                # Find PROMPT section boundaries
-                prompt_start = -1
-                prompt_end = len(lines)
-
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-                    if stripped == '[PROMPT]':
-                        prompt_start = i
-                    elif prompt_start >= 0 and stripped.startswith('['):
-                        prompt_end = i
-                        break
-
-                # Build new config
-                new_lines = []
-
-                # Part 1: Everything before PROMPT section
-                if prompt_start >= 0:
-                    new_lines.extend(lines[:prompt_start + 1])
-                else:
-                    new_lines.append('[PROMPT]\n')
-
-                # Part 2: New prompt
-                new_lines.append(prompt + '\n')
-                new_lines.append('\n')
-
-                # Part 3: Everything after PROMPT section
-                if prompt_end < len(lines):
-                    new_lines.extend(lines[prompt_end:])
-
-                # Write directly (we're inside lock, safe from concurrent access)
-                with open(self.config_path, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-                    f.flush()
-                    os.fsync(f.fileno())
-                return True
-
+            self.db.set_setting('ai_prompt_template', prompt)
+            return True
         except Exception as e:
             print(f"❌ Error updating prompt: {e}")
             return False
@@ -364,9 +322,11 @@ Transcript: {transcript}"""
         return self.set_prompt(default_prompt)
 
     def get_settings(self) -> Dict[str, str]:
-        """Get all settings from config"""
-        config = self.read_config()
-        return config.get('settings', {})
+        """Get all settings from database"""
+        db_settings = self.db.get_all_settings()
+
+        # Convert to simple key-value dict for backward compatibility
+        return {key: info['value'] for key, info in db_settings.items()}
 
     def set_setting(self, key: str, value: str) -> bool:
         """
@@ -377,41 +337,10 @@ Transcript: {transcript}"""
             value: New value
         """
         try:
-            with locked_file(self.config_path, timeout=self.lock_timeout):
-                # Read existing config
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                # Find SETTINGS section
-                settings_start = -1
-                settings_end = len(lines)
-                setting_found = False
-
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-                    if stripped == '[SETTINGS]':
-                        settings_start = i
-                    elif settings_start >= 0 and stripped.startswith('['):
-                        settings_end = i
-                        break
-                    elif settings_start >= 0 and stripped.startswith(f"{key}="):
-                        # Update existing setting
-                        lines[i] = f"{key}={value}\n"
-                        setting_found = True
-
-                # If setting not found, add it
-                if not setting_found and settings_start >= 0:
-                    lines.insert(settings_end, f"{key}={value}\n")
-
-                # Write directly (we're inside lock, safe from concurrent access)
-                with open(self.config_path, 'w', encoding='utf-8') as f:
-                    f.writelines(lines)
-                    f.flush()
-                    os.fsync(f.fileno())
-                return True
-
+            self.db.set_setting(key, value)
+            return True
         except Exception as e:
-            print(f"❌ Error updating setting: {e}")
+            print(f"❌ Error updating setting {key}: {e}")
             return False
 
     def reset_all_settings(self) -> bool:

@@ -87,6 +87,7 @@ class VideoDatabase:
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
         self._migrate_add_settings_table()
+        self._migrate_add_channels_table()
 
     def _migrate_add_source_type(self):
         """
@@ -282,6 +283,121 @@ class VideoDatabase:
                 print(f"✅ Migrated {imported} settings from .env to database")
                 print(f"   Secrets are now encrypted in database")
                 print(f"   .env file is no longer needed for runtime (but kept for backup)")
+
+    def _migrate_add_channels_table(self):
+        """
+        Migration: Add channels table for database-backed channel management
+
+        This migration creates a channels table to store monitored YouTube channels.
+        Eliminates config.txt for channel storage!
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Create channels table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    channel_id TEXT PRIMARY KEY,
+                    channel_name TEXT NOT NULL,
+                    enabled BOOLEAN DEFAULT 1,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Add config.txt settings that belong here
+            cursor.execute("""
+                INSERT OR IGNORE INTO settings (key, value, type, encrypted, description)
+                VALUES
+                    ('SUMMARY_LENGTH', '500', 'integer', 0, 'Maximum length of summary in tokens'),
+                    ('USE_SUMMARY_LENGTH', 'false', 'enum', 0, 'Use summary length limit'),
+                    ('SKIP_SHORTS', 'true', 'enum', 0, 'Skip YouTube Shorts videos'),
+                    ('MAX_VIDEOS_PER_CHANNEL', '5', 'integer', 0, 'Maximum videos to check per channel'),
+                    ('CHECK_INTERVAL_MINUTES', '60', 'integer', 0, 'How often to check for new videos (minutes)'),
+                    ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process')
+            """)
+
+            conn.commit()
+
+        # Run migration to import config.txt if it exists
+        self._migrate_import_config_to_db()
+
+    def _migrate_import_config_to_db(self):
+        """
+        Migration: Import existing config.txt to database (one-time)
+
+        This migration reads config.txt and imports:
+        - Channels → channels table
+        - AI Prompt → settings table
+        - Settings → settings table
+
+        Only runs if channels table is empty (hasn't been migrated yet).
+        """
+        import os
+
+        config_path = 'config.txt'
+        if not os.path.exists(config_path):
+            return  # No config.txt to migrate
+
+        # Check if migration already happened (any channels exist)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM channels")
+            if cursor.fetchone()[0] > 0:
+                return  # Already migrated
+
+            # Parse config.txt
+            try:
+                from src.managers.config_manager import ConfigManager
+                config_mgr = ConfigManager(config_path)
+                config = config_mgr.read_config()
+
+                imported_channels = 0
+                imported_settings = 0
+
+                # Import channels
+                for channel_id in config.get('channels', []):
+                    channel_name = config.get('channel_names', {}).get(channel_id, channel_id)
+                    try:
+                        cursor.execute("""
+                            INSERT INTO channels (channel_id, channel_name, enabled)
+                            VALUES (?, ?, 1)
+                        """, (channel_id, channel_name))
+                        imported_channels += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate channel {channel_id}: {e}")
+
+                # Import AI prompt
+                prompt = config.get('prompt', '')
+                if prompt:
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description)
+                            VALUES ('ai_prompt_template', ?, 'text', 0, 'AI prompt template for summarization')
+                        """, (prompt,))
+                        imported_settings += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate prompt: {e}")
+
+                # Import config.txt settings
+                for key, value in config.get('settings', {}).items():
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description, updated_at)
+                            VALUES (?, ?, 'text', 0, '', CURRENT_TIMESTAMP)
+                        """, (key, value))
+                        imported_settings += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate setting {key}: {e}")
+
+                conn.commit()
+
+                if imported_channels > 0 or imported_settings > 0:
+                    print(f"✅ Migrated {imported_channels} channels and {imported_settings} settings from config.txt to database")
+                    print(f"   config.txt is no longer needed for runtime (but kept for backup)")
+
+            except Exception as e:
+                print(f"⚠️ Failed to parse config.txt for migration: {e}")
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""
@@ -960,6 +1076,174 @@ class VideoDatabase:
             cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
             conn.commit()
             return cursor.rowcount > 0
+
+    # ========================
+    # Channels Management
+    # ========================
+
+    def get_all_channels(self) -> List[Dict[str, Any]]:
+        """
+        Get all channels from database.
+
+        Returns:
+            List of channel dicts with {channel_id, channel_name, enabled}
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT channel_id, channel_name, enabled, added_at, updated_at
+                FROM channels
+                ORDER BY channel_name
+            """)
+
+            channels = []
+            for row in cursor.fetchall():
+                channels.append({
+                    'channel_id': row[0],
+                    'channel_name': row[1],
+                    'enabled': bool(row[2]),
+                    'added_at': row[3],
+                    'updated_at': row[4]
+                })
+
+            return channels
+
+    def get_enabled_channels(self) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Get enabled channels in format compatible with ConfigManager.
+
+        Returns:
+            Tuple of (channel_ids list, channel_names dict)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT channel_id, channel_name
+                FROM channels
+                WHERE enabled = 1
+                ORDER BY channel_name
+            """)
+
+            channel_ids = []
+            channel_names = {}
+
+            for row in cursor.fetchall():
+                channel_id = row[0]
+                channel_name = row[1]
+                channel_ids.append(channel_id)
+                channel_names[channel_id] = channel_name
+
+            return channel_ids, channel_names
+
+    def add_channel(self, channel_id: str, channel_name: str = None) -> bool:
+        """
+        Add a channel to database.
+
+        Args:
+            channel_id: YouTube channel ID
+            channel_name: Optional display name
+
+        Returns:
+            True if added, False if already exists
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    INSERT INTO channels (channel_id, channel_name, enabled)
+                    VALUES (?, ?, 1)
+                """, (channel_id, channel_name or channel_id))
+                conn.commit()
+                return True
+
+            except sqlite3.IntegrityError:
+                # Already exists
+                return False
+
+    def remove_channel(self, channel_id: str) -> bool:
+        """
+        Remove a channel from database.
+
+        Args:
+            channel_id: YouTube channel ID
+
+        Returns:
+            True if removed, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_channel(self, channel_id: str, channel_name: str = None, enabled: bool = None) -> bool:
+        """
+        Update channel properties.
+
+        Args:
+            channel_id: YouTube channel ID
+            channel_name: Optional new name
+            enabled: Optional enabled status
+
+        Returns:
+            True if updated, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            updates = []
+            params = []
+
+            if channel_name is not None:
+                updates.append("channel_name = ?")
+                params.append(channel_name)
+
+            if enabled is not None:
+                updates.append("enabled = ?")
+                params.append(int(enabled))
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(channel_id)
+
+            query = f"UPDATE channels SET {', '.join(updates)} WHERE channel_id = ?"
+            cursor.execute(query, params)
+            conn.commit()
+
+            return cursor.rowcount > 0
+
+    def set_channels(self, channels: List[str], channel_names: Dict[str, str] = None) -> bool:
+        """
+        Replace all channels with new list.
+
+        Args:
+            channels: List of channel IDs
+            channel_names: Optional dict mapping channel_id to name
+
+        Returns:
+            True if successful
+        """
+        names = channel_names or {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Clear existing channels
+            cursor.execute("DELETE FROM channels")
+
+            # Insert new channels
+            for channel_id in channels:
+                channel_name = names.get(channel_id, channel_id)
+                cursor.execute("""
+                    INSERT INTO channels (channel_id, channel_name, enabled)
+                    VALUES (?, ?, 1)
+                """, (channel_id, channel_name))
+
+            conn.commit()
+            return True
 
 
 if __name__ == '__main__':
