@@ -11,6 +11,9 @@ from typing import Dict, Optional, Tuple, Any
 from contextlib import contextmanager
 from datetime import datetime
 
+# Import centralized backup manager
+from src.managers.backup_manager import BackupManager
+
 # Use filelock for cross-platform file locking
 try:
     from filelock import FileLock, Timeout
@@ -28,13 +31,15 @@ except ImportError:
 
 
 class SettingsManager:
-    """Secure settings manager for .env file operations"""
+    """Secure settings manager for .env file operations with centralized backups"""
 
     def __init__(self, env_path='.env', lock_timeout=10):
         self.env_path = env_path
         self.lock_path = f"{env_path}.lock"
-        self.backup_path = f"{env_path}.backup"
         self.lock_timeout = lock_timeout
+
+        # Use centralized backup manager
+        self.backup_manager = BackupManager()
 
         # Define all expected environment variables with their properties
         self.env_schema = {
@@ -300,9 +305,9 @@ class SettingsManager:
 
         try:
             with self._lock():
-                # Create backup
+                # Create backup using centralized backup manager
                 if os.path.exists(self.env_path):
-                    shutil.copy2(self.env_path, self.backup_path)
+                    self.backup_manager.create_backup(self.env_path, 'env')
 
                 # Read existing .env
                 env_vars = self._parse_env_file()
@@ -316,13 +321,10 @@ class SettingsManager:
                 return True, f"Updated {key} successfully"
 
         except Exception as e:
-            # Try to restore from backup
-            if os.path.exists(self.backup_path):
-                try:
-                    shutil.copy2(self.backup_path, self.env_path)
-                    print("✅ Restored .env from backup")
-                except:
-                    pass
+            # Try to restore from latest backup
+            latest_backup = self.backup_manager.get_latest_backup('env', os.path.basename(self.env_path))
+            if latest_backup:
+                self.backup_manager.restore_backup(latest_backup, self.env_path)
 
             return False, f"Failed to update {key}: {str(e)}"
 
@@ -347,9 +349,9 @@ class SettingsManager:
 
         try:
             with self._lock():
-                # Create backup
+                # Create backup using centralized backup manager
                 if os.path.exists(self.env_path):
-                    shutil.copy2(self.env_path, self.backup_path)
+                    self.backup_manager.create_backup(self.env_path, 'env')
 
                 # Read existing .env
                 env_vars = self._parse_env_file()
@@ -373,13 +375,10 @@ class SettingsManager:
                 return True, f"Updated {updated_count} settings successfully", []
 
         except Exception as e:
-            # Try to restore from backup
-            if os.path.exists(self.backup_path):
-                try:
-                    shutil.copy2(self.backup_path, self.env_path)
-                    print("✅ Restored .env from backup")
-                except:
-                    pass
+            # Try to restore from latest backup
+            latest_backup = self.backup_manager.get_latest_backup('env', os.path.basename(self.env_path))
+            if latest_backup:
+                self.backup_manager.restore_backup(latest_backup, self.env_path)
 
             return False, f"Failed to update settings: {str(e)}", []
 
