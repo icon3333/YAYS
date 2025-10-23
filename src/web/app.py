@@ -25,6 +25,12 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load environment variables from .env file
+# Create .env from .env.example if it doesn't exist
+if not os.path.exists('.env') and os.path.exists('.env.example'):
+    import shutil
+    shutil.copy2('.env.example', '.env')
+    print("✅ Created .env from .env.example")
+
 load_dotenv()
 
 # Import shared modules
@@ -397,6 +403,11 @@ async def update_settings(data: MultipleSettingsUpdate):
             if not success:
                 logger.error(f"Validation failed: {errors}")
                 raise HTTPException(status_code=400, detail={"message": message, "errors": errors})
+
+            # Reload environment variables so changes take effect immediately
+            load_dotenv(override=True)
+            logger.info("Reloaded environment variables from .env")
+
             results["env"] = message
             results["restart_required"] = True
             logger.info(f"Updated .env settings: {list(env_updates.keys())}")
@@ -597,6 +608,9 @@ async def get_openai_models():
     try:
         import openai
 
+        # Reload environment to get latest saved API key
+        load_dotenv(override=True)
+
         api_key = os.getenv('OPENAI_API_KEY', '')
         if not api_key:
             # Return a default list if no API key is configured
@@ -683,6 +697,9 @@ async def test_credentials(data: CredentialTest):
     """Test API credentials using provided values or saved values from .env"""
     try:
         if data.credential_type == 'openai':
+            # Reload environment to get latest saved values
+            load_dotenv(override=True)
+
             # Use provided value or fall back to .env
             # Handle None and empty string
             api_key = data.test_value if data.test_value else os.getenv('OPENAI_API_KEY', '')
@@ -703,6 +720,9 @@ async def test_credentials(data: CredentialTest):
             }
 
         elif data.credential_type == 'smtp':
+            # Reload environment to get latest saved values
+            load_dotenv(override=True)
+
             # Use provided values or fall back to .env
             # Handle None and empty string
             logger.debug(f"SMTP test request - test_user: {data.test_user}, test_pass: {'[present]' if data.test_pass else '[empty]'}")
