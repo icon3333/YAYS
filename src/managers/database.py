@@ -81,15 +81,11 @@ class VideoDatabase:
                 ON videos(processing_status)
             """)
 
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_source_type
-                ON videos(source_type)
-            """)
-
             conn.commit()
 
-            # Run migration to add source_type column to existing databases
-            self._migrate_add_source_type()
+        # Run migration to add source_type column to existing databases
+        # Must run outside the CREATE TABLE transaction for existing databases
+        self._migrate_add_source_type()
 
     def _migrate_add_source_type(self):
         """
@@ -124,6 +120,14 @@ class VideoDatabase:
                 """)
 
                 conn.commit()
+
+            # Create index on source_type (safe to run multiple times)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_source_type
+                ON videos(source_type)
+            """)
+
+            conn.commit()
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""
