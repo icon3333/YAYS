@@ -792,9 +792,15 @@
                     const element = document.getElementById(key);
 
                     if (key === 'OPENAI_API_KEY' || key === 'SMTP_PASS') {
-                        // For password fields, show placeholder if empty, otherwise show masked value
+                        // For password fields, show masked value in the field and placeholder
                         if (element) {
-                            element.placeholder = info.masked || (key === 'OPENAI_API_KEY' ? 'sk-...' : '16-character app password');
+                            if (info.masked && info.masked !== '') {
+                                // Show masked value in the field so user knows it's saved
+                                element.value = info.masked;
+                                element.placeholder = 'Enter new key to update';
+                            } else {
+                                element.placeholder = (key === 'OPENAI_API_KEY' ? 'sk-...' : '16-character app password');
+                            }
                         }
                     } else if (element) {
                         if (info.type === 'enum') {
@@ -850,14 +856,16 @@
                 settingsToSave['SEND_EMAIL_SUMMARIES'] = document.getElementById('SEND_EMAIL_SUMMARIES').value;
                 settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
-                // Get password fields (only save if they have values)
+                // Get password fields (only save if they have new values, not masked values)
                 const openaiKey = document.getElementById('OPENAI_API_KEY').value;
-                if (openaiKey) {
+                // Don't save if it's the masked value or empty
+                if (openaiKey && !openaiKey.includes('***')) {
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
                 }
 
                 const smtpPass = document.getElementById('SMTP_PASS').value;
-                if (smtpPass) {
+                // Don't save if it's masked (dots) or empty
+                if (smtpPass && !smtpPass.includes('•')) {
                     settingsToSave['SMTP_PASS'] = smtpPass;
                 }
 
@@ -915,12 +923,15 @@
             try {
                 const apiKey = document.getElementById('OPENAI_API_KEY').value.trim();
 
+                // If the field contains the masked value, don't send it - let backend use saved value
+                const testValue = (apiKey && !apiKey.includes('***')) ? apiKey : undefined;
+
                 const response = await fetch('/api/settings/test', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         credential_type: 'openai',
-                        test_value: apiKey || undefined
+                        test_value: testValue
                     })
                 });
 
@@ -945,13 +956,17 @@
                 const smtpUser = document.getElementById('SMTP_USER').value.trim();
                 const smtpPass = document.getElementById('SMTP_PASS').value.trim();
 
+                // If fields contain masked values, don't send them - let backend use saved values
+                const testUser = smtpUser || undefined;
+                const testPass = (smtpPass && !smtpPass.includes('•')) ? smtpPass : undefined;
+
                 const response = await fetch('/api/settings/test', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         credential_type: 'smtp',
-                        test_user: smtpUser || undefined,
-                        test_pass: smtpPass || undefined
+                        test_user: testUser,
+                        test_pass: testPass
                     })
                 });
 
@@ -1103,9 +1118,10 @@ Transcript: {transcript}`;
                 // Get OpenAI credentials
                 settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
-                // Get API key if changed
+                // Get API key if changed (don't save masked values)
                 const openaiKey = document.getElementById('OPENAI_API_KEY').value;
-                if (openaiKey) {
+                // Don't save if it's the masked value or empty
+                if (openaiKey && !openaiKey.includes('***')) {
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
                 }
 
