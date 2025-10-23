@@ -10,6 +10,8 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
+from src.utils.formatters import format_duration, format_views, format_upload_date, format_processed_date
+
 
 class VideoDatabase:
     """SQLite database for tracking processed videos"""
@@ -253,13 +255,13 @@ class VideoDatabase:
                     'channel_name': row['channel_name'] or row['channel_id'],
                     'title': row['title'],
                     'duration_seconds': row['duration_seconds'],
-                    'duration_formatted': self._format_duration(row['duration_seconds']),
+                    'duration_formatted': format_duration(row['duration_seconds']),
                     'view_count': row['view_count'],
-                    'view_count_formatted': self._format_views(row['view_count']),
+                    'view_count_formatted': format_views(row['view_count']),
                     'upload_date': row['upload_date'],
-                    'upload_date_formatted': self._format_upload_date(row['upload_date']),
+                    'upload_date_formatted': format_upload_date(row['upload_date']),
                     'processed_date': row['processed_date'],
-                    'processed_date_formatted': self._format_date(row['processed_date']),
+                    'processed_date_formatted': format_processed_date(row['processed_date']),
                     'processing_status': row['processing_status'],
                     'error_message': row['error_message'],
                     'email_sent': bool(row['email_sent'])
@@ -331,108 +333,6 @@ class VideoDatabase:
 
         return migrated
 
-    @staticmethod
-    def _format_duration(seconds: Optional[int]) -> str:
-        """Format duration in seconds to HH:MM:SS or MM:SS"""
-        if not seconds:
-            return '0:00'
-
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-
-        if hours > 0:
-            return f"{hours}:{minutes:02d}:{secs:02d}"
-        else:
-            return f"{minutes}:{secs:02d}"
-
-    @staticmethod
-    def _format_views(views: Optional[int]) -> str:
-        """Format view count to human-readable string"""
-        if not views:
-            return 'Unknown views'
-
-        if views < 1000:
-            return f"{views:,} views"
-        elif views < 1_000_000:
-            return f"{views/1000:.1f}K views"
-        else:
-            return f"{views/1_000_000:.1f}M views"
-
-    @staticmethod
-    def _format_upload_date(date_str: Optional[str]) -> str:
-        """Format upload date (YYYY-MM-DD format) to human-readable format"""
-        if not date_str:
-            return 'Unknown date'
-
-        try:
-            # Handle both YYYY-MM-DD and full ISO datetime formats
-            if 'T' in date_str or ' ' in date_str:
-                dt = datetime.fromisoformat(date_str.replace(' ', 'T'))
-            else:
-                # Parse YYYY-MM-DD format
-                dt = datetime.strptime(date_str, '%Y-%m-%d')
-
-            now = datetime.now()
-            days_ago = (now.date() - dt.date()).days
-
-            # If today
-            if days_ago == 0:
-                return "Today"
-
-            # If yesterday
-            elif days_ago == 1:
-                return "Yesterday"
-
-            # If within last week
-            elif days_ago < 7:
-                return f"{days_ago} days ago"
-
-            # If within last month
-            elif days_ago < 30:
-                weeks = days_ago // 7
-                return f"{weeks} week{'s' if weeks > 1 else ''} ago"
-
-            # If within last year
-            elif days_ago < 365:
-                months = days_ago // 30
-                return f"{months} month{'s' if months > 1 else ''} ago"
-
-            # Otherwise show the date
-            else:
-                return dt.strftime('%b %d, %Y')
-
-        except:
-            return date_str
-
-    @staticmethod
-    def _format_date(date_str: Optional[str]) -> str:
-        """Format ISO date to human-readable format"""
-        if not date_str:
-            return 'Unknown'
-
-        try:
-            dt = datetime.fromisoformat(date_str)
-            now = datetime.now()
-
-            # If today
-            if dt.date() == now.date():
-                return f"Today at {dt.strftime('%H:%M')}"
-
-            # If yesterday
-            elif dt.date() == (now - timedelta(days=1)).date():
-                return f"Yesterday at {dt.strftime('%H:%M')}"
-
-            # If within last week
-            elif (now - dt).days < 7:
-                return dt.strftime('%A at %H:%M')
-
-            # Otherwise
-            else:
-                return dt.strftime('%b %d, %Y')
-
-        except:
-            return date_str
 
     def cleanup_old_videos(self, days: int = 365, keep_minimum: int = 1000):
         """
@@ -531,13 +431,13 @@ class VideoDatabase:
                 'channel_name': row['channel_name'],
                 'title': row['title'],
                 'duration_seconds': row['duration_seconds'],
-                'duration_formatted': self._format_duration(row['duration_seconds']),
+                'duration_formatted': format_duration(row['duration_seconds']),
                 'view_count': row['view_count'],
-                'view_count_formatted': self._format_views(row['view_count']),
+                'view_count_formatted': format_views(row['view_count']),
                 'upload_date': row['upload_date'],
-                'upload_date_formatted': self._format_upload_date(row['upload_date']),
+                'upload_date_formatted': format_upload_date(row['upload_date']),
                 'processed_date': row['processed_date'],
-                'processed_date_formatted': self._format_date(row['processed_date']),
+                'processed_date_formatted': format_processed_date(row['processed_date']),
                 'summary_text': row['summary_text'],
                 'processing_status': row['processing_status'],
                 'error_message': row['error_message'],

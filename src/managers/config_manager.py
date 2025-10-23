@@ -8,23 +8,9 @@ import os
 import re
 import time
 from typing import Dict, List, Tuple, Optional
-from contextlib import contextmanager
 
-# Use filelock library for cross-platform file locking
-try:
-    from filelock import FileLock, Timeout
-except ImportError:
-    # Fallback: basic implementation without locking
-    print("Warning: filelock not installed. File locking disabled.")
-    class FileLock:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-    class Timeout(Exception):
-        pass
+from src.utils.file_lock import locked_file
+from src.utils.validators import is_valid_channel_id
 
 
 class ConfigManager:
@@ -32,18 +18,7 @@ class ConfigManager:
 
     def __init__(self, config_path='config.txt', lock_timeout=10):
         self.config_path = config_path
-        self.lock_path = f"{config_path}.lock"
         self.lock_timeout = lock_timeout
-
-    @contextmanager
-    def _lock(self):
-        """Context manager for file locking"""
-        lock = FileLock(self.lock_path, timeout=self.lock_timeout)
-        try:
-            with lock:
-                yield
-        except Timeout:
-            raise TimeoutError(f"Could not acquire lock on {self.config_path} after {self.lock_timeout}s")
 
     def ensure_config_exists(self):
         """Create default config if it doesn't exist"""
@@ -110,7 +85,7 @@ MAX_VIDEOS_PER_CHANNEL=5
         }
 
         try:
-            with self._lock():
+            with locked_file(self.config_path, timeout=self.lock_timeout):
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     config = self._parse_config(f.readlines())
         except TimeoutError as e:
@@ -201,16 +176,7 @@ MAX_VIDEOS_PER_CHANNEL=5
 
     def _is_valid_channel_id(self, channel_id: str) -> bool:
         """Validate channel ID format (UC followed by 22 chars, or @handle)"""
-        # Standard channel ID: UC + 22 alphanumeric/dash/underscore
-        if re.match(r'^UC[\w-]{22}$', channel_id):
-            return True
-        # Handle format: @username (less common but valid)
-        if re.match(r'^@[\w-]+$', channel_id):
-            return True
-        # Custom URL format (will work in RSS but not ideal)
-        if re.match(r'^[\w-]+$', channel_id) and len(channel_id) > 3:
-            return True
-        return False
+        return is_valid_channel_id(channel_id)
 
     def write_config(self, channels: List[str], channel_names: Dict[str, str]) -> bool:
         """
@@ -221,7 +187,7 @@ MAX_VIDEOS_PER_CHANNEL=5
         self.ensure_config_exists()
 
         try:
-            with self._lock():
+            with locked_file(self.config_path, timeout=self.lock_timeout):
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -337,7 +303,7 @@ MAX_VIDEOS_PER_CHANNEL=5
     def set_prompt(self, prompt: str) -> bool:
         """Update the AI prompt template"""
         try:
-            with self._lock():
+            with locked_file(self.config_path, timeout=self.lock_timeout):
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -411,7 +377,7 @@ Transcript: {transcript}"""
             value: New value
         """
         try:
-            with self._lock():
+            with locked_file(self.config_path, timeout=self.lock_timeout):
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -458,7 +424,7 @@ Transcript: {transcript}"""
         }
 
         try:
-            with self._lock():
+            with locked_file(self.config_path, timeout=self.lock_timeout):
                 # Read existing config
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -677,7 +643,6 @@ class ProcessedVideos:
         self.file_path = file_path
         self.max_entries = max_entries
         self.keep_entries = keep_entries
-        self.lock_path = f"{file_path}.lock"
         self.lock_timeout = 10
 
         # Ensure data directory exists
@@ -686,23 +651,13 @@ class ProcessedVideos:
         # Load initial set
         self._processed = self._load()
 
-    @contextmanager
-    def _lock(self):
-        """Context manager for file locking"""
-        lock = FileLock(self.lock_path, timeout=self.lock_timeout)
-        try:
-            with lock:
-                yield
-        except Timeout:
-            raise TimeoutError(f"Could not acquire lock on {self.file_path}")
-
     def _load(self) -> set:
         """Load processed video IDs from file"""
         if not os.path.exists(self.file_path):
             return set()
 
         try:
-            with self._lock():
+            with locked_file(self.file_path, timeout=self.lock_timeout):
                 with open(self.file_path, 'r', encoding='utf-8') as f:
                     return set(line.strip() for line in f if line.strip())
         except Exception as e:
@@ -721,7 +676,7 @@ class ProcessedVideos:
         self._processed.add(video_id)
 
         try:
-            with self._lock():
+            with locked_file(self.file_path, timeout=self.lock_timeout):
                 # Append to file
                 with open(self.file_path, 'a', encoding='utf-8') as f:
                     f.write(f"{video_id}\n")
