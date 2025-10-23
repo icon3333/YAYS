@@ -77,8 +77,8 @@ app.mount("/static", NoCacheStaticFiles(directory="src/static", html=False), nam
 # Setup templates
 templates = Jinja2Templates(directory="src/templates")
 
-# Initialize config manager
-config_manager = ConfigManager('config.txt')
+# Initialize managers (all use database now!)
+config_manager = ConfigManager('config.txt', 'data/videos.db')
 settings_manager = SettingsManager('.env', 'data/videos.db')
 video_db = VideoDatabase('data/videos.db')
 export_manager = ExportManager('data/videos.db', 'config.txt', '.env')

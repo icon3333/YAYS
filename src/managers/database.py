@@ -6,11 +6,12 @@ Tracks processed videos with metadata for stats and feed
 
 import sqlite3
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 from src.utils.formatters import format_duration, format_views, format_upload_date, format_processed_date
+from src.utils.encryption import get_encryption
 
 
 class VideoDatabase:
@@ -38,6 +39,56 @@ class VideoDatabase:
             raise e
         finally:
             conn.close()
+
+    def _encrypt_value(self, value: str) -> str:
+        """Encrypt a value using Fernet encryption"""
+        if not value:
+            return ''
+        enc = get_encryption()
+        return enc.encrypt(value)
+
+    def _decrypt_value(self, value: str) -> str:
+        """Decrypt a value using Fernet encryption"""
+        if not value:
+            return ''
+        enc = get_encryption()
+        return enc.decrypt(value)
+
+    def _video_row_to_dict(self, row: sqlite3.Row, include_summary: bool = True) -> Dict[str, Any]:
+        """
+        Convert a SQLite row to a video dictionary with formatted fields.
+
+        Args:
+            row: SQLite row from videos table
+            include_summary: Whether to include summary_text and summary_length
+
+        Returns:
+            Dict with video data and formatted fields
+        """
+        video = {
+            'id': row['id'],
+            'channel_id': row['channel_id'],
+            'channel_name': row['channel_name'] or row['channel_id'],
+            'title': row['title'],
+            'duration_seconds': row['duration_seconds'],
+            'duration_formatted': format_duration(row['duration_seconds']),
+            'view_count': row['view_count'],
+            'view_count_formatted': format_views(row['view_count']),
+            'upload_date': row['upload_date'],
+            'upload_date_formatted': format_upload_date(row['upload_date']),
+            'processed_date': row['processed_date'],
+            'processed_date_formatted': format_processed_date(row['processed_date']),
+            'processing_status': row['processing_status'],
+            'error_message': row['error_message'],
+            'email_sent': bool(row['email_sent']),
+            'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
+        }
+
+        if include_summary:
+            video['summary_text'] = row['summary_text']
+            video['summary_length'] = row['summary_length']
+
+        return video
 
     def _init_db(self):
         """Initialize database schema"""
@@ -87,6 +138,7 @@ class VideoDatabase:
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
         self._migrate_add_settings_table()
+        self._migrate_add_channels_table()
 
     def _migrate_add_source_type(self):
         """
@@ -199,9 +251,6 @@ class VideoDatabase:
         Secrets are encrypted before storage.
         Only runs if settings are still empty (hasn't been migrated yet).
         """
-        import os
-        from src.utils.encryption import get_encryption
-
         env_path = '.env'
         if not os.path.exists(env_path):
             return  # No .env file to migrate
@@ -233,9 +282,6 @@ class VideoDatabase:
             if not env_vars:
                 return  # Nothing to migrate
 
-            # Get encryption instance
-            enc = get_encryption()
-
             # Define which keys should be encrypted
             encrypted_keys = {'OPENAI_API_KEY', 'SMTP_PASS'}
 
@@ -254,21 +300,14 @@ class VideoDatabase:
                         # Update existing setting
                         should_encrypt = row[0] or (key in encrypted_keys)
 
-                        if should_encrypt:
-                            # Encrypt the value
-                            encrypted_value = enc.encrypt(value)
-                            cursor.execute("""
-                                UPDATE settings
-                                SET value = ?, encrypted = 1, updated_at = CURRENT_TIMESTAMP
-                                WHERE key = ?
-                            """, (encrypted_value, key))
-                        else:
-                            # Store plaintext
-                            cursor.execute("""
-                                UPDATE settings
-                                SET value = ?, updated_at = CURRENT_TIMESTAMP
-                                WHERE key = ?
-                            """, (value, key))
+                        # Encrypt if needed using helper method
+                        final_value = self._encrypt_value(value) if should_encrypt else value
+
+                        cursor.execute("""
+                            UPDATE settings
+                            SET value = ?, encrypted = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE key = ?
+                        """, (final_value, int(should_encrypt), key))
 
                         imported += 1
 
@@ -282,6 +321,121 @@ class VideoDatabase:
                 print(f"✅ Migrated {imported} settings from .env to database")
                 print(f"   Secrets are now encrypted in database")
                 print(f"   .env file is no longer needed for runtime (but kept for backup)")
+
+    def _migrate_add_channels_table(self):
+        """
+        Migration: Add channels table for database-backed channel management
+
+        This migration creates a channels table to store monitored YouTube channels.
+        Eliminates config.txt for channel storage!
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Create channels table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    channel_id TEXT PRIMARY KEY,
+                    channel_name TEXT NOT NULL,
+                    enabled BOOLEAN DEFAULT 1,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Add config.txt settings that belong here
+            cursor.execute("""
+                INSERT OR IGNORE INTO settings (key, value, type, encrypted, description)
+                VALUES
+                    ('SUMMARY_LENGTH', '500', 'integer', 0, 'Maximum length of summary in tokens'),
+                    ('USE_SUMMARY_LENGTH', 'false', 'enum', 0, 'Use summary length limit'),
+                    ('SKIP_SHORTS', 'true', 'enum', 0, 'Skip YouTube Shorts videos'),
+                    ('MAX_VIDEOS_PER_CHANNEL', '5', 'integer', 0, 'Maximum videos to check per channel'),
+                    ('CHECK_INTERVAL_MINUTES', '60', 'integer', 0, 'How often to check for new videos (minutes)'),
+                    ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process')
+            """)
+
+            conn.commit()
+
+        # Run migration to import config.txt if it exists
+        self._migrate_import_config_to_db()
+
+    def _migrate_import_config_to_db(self):
+        """
+        Migration: Import existing config.txt to database (one-time)
+
+        This migration reads config.txt and imports:
+        - Channels → channels table
+        - AI Prompt → settings table
+        - Settings → settings table
+
+        Only runs if channels table is empty (hasn't been migrated yet).
+        """
+        import os
+
+        config_path = 'config.txt'
+        if not os.path.exists(config_path):
+            return  # No config.txt to migrate
+
+        # Check if migration already happened (any channels exist)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM channels")
+            if cursor.fetchone()[0] > 0:
+                return  # Already migrated
+
+            # Parse config.txt
+            try:
+                from src.managers.config_manager import ConfigManager
+                config_mgr = ConfigManager(config_path)
+                config = config_mgr.read_config()
+
+                imported_channels = 0
+                imported_settings = 0
+
+                # Import channels
+                for channel_id in config.get('channels', []):
+                    channel_name = config.get('channel_names', {}).get(channel_id, channel_id)
+                    try:
+                        cursor.execute("""
+                            INSERT INTO channels (channel_id, channel_name, enabled)
+                            VALUES (?, ?, 1)
+                        """, (channel_id, channel_name))
+                        imported_channels += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate channel {channel_id}: {e}")
+
+                # Import AI prompt
+                prompt = config.get('prompt', '')
+                if prompt:
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description)
+                            VALUES ('ai_prompt_template', ?, 'text', 0, 'AI prompt template for summarization')
+                        """, (prompt,))
+                        imported_settings += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate prompt: {e}")
+
+                # Import config.txt settings
+                for key, value in config.get('settings', {}).items():
+                    try:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description, updated_at)
+                            VALUES (?, ?, 'text', 0, '', CURRENT_TIMESTAMP)
+                        """, (key, value))
+                        imported_settings += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to migrate setting {key}: {e}")
+
+                conn.commit()
+
+                if imported_channels > 0 or imported_settings > 0:
+                    print(f"✅ Migrated {imported_channels} channels and {imported_settings} settings from config.txt to database")
+                    print(f"   config.txt is no longer needed for runtime (but kept for backup)")
+
+            except Exception as e:
+                print(f"⚠️ Failed to parse config.txt for migration: {e}")
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""
@@ -469,24 +623,7 @@ class VideoDatabase:
 
             videos = []
             for row in cursor.fetchall():
-                videos.append({
-                    'id': row['id'],
-                    'channel_id': row['channel_id'],
-                    'channel_name': row['channel_name'] or row['channel_id'],
-                    'title': row['title'],
-                    'duration_seconds': row['duration_seconds'],
-                    'duration_formatted': format_duration(row['duration_seconds']),
-                    'view_count': row['view_count'],
-                    'view_count_formatted': format_views(row['view_count']),
-                    'upload_date': row['upload_date'],
-                    'upload_date_formatted': format_upload_date(row['upload_date']),
-                    'processed_date': row['processed_date'],
-                    'processed_date_formatted': format_processed_date(row['processed_date']),
-                    'processing_status': row['processing_status'],
-                    'error_message': row['error_message'],
-                    'email_sent': bool(row['email_sent']),
-                    'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
-                })
+                videos.append(self._video_row_to_dict(row, include_summary=False))
 
             return videos
 
@@ -610,26 +747,7 @@ class VideoDatabase:
             if not row:
                 return None
 
-            return {
-                'id': row['id'],
-                'channel_id': row['channel_id'],
-                'channel_name': row['channel_name'],
-                'title': row['title'],
-                'duration_seconds': row['duration_seconds'],
-                'duration_formatted': format_duration(row['duration_seconds']),
-                'view_count': row['view_count'],
-                'view_count_formatted': format_views(row['view_count']),
-                'upload_date': row['upload_date'],
-                'upload_date_formatted': format_upload_date(row['upload_date']),
-                'processed_date': row['processed_date'],
-                'processed_date_formatted': format_processed_date(row['processed_date']),
-                'summary_text': row['summary_text'],
-                'processing_status': row['processing_status'],
-                'error_message': row['error_message'],
-                'email_sent': bool(row['email_sent']),
-                'summary_length': row['summary_length'],
-                'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
-            }
+            return self._video_row_to_dict(row, include_summary=True)
 
     def reset_video_status(self, video_id: str):
         """Reset video processing status to pending for retry"""
@@ -799,8 +917,6 @@ class VideoDatabase:
         Returns:
             Decrypted setting value or None if not found
         """
-        from src.utils.encryption import get_encryption
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
@@ -811,12 +927,8 @@ class VideoDatabase:
 
             value, encrypted = row[0], row[1]
 
-            # Decrypt if needed
-            if encrypted:
-                enc = get_encryption()
-                return enc.decrypt(value)
-            else:
-                return value
+            # Decrypt if needed using helper method
+            return self._decrypt_value(value) if encrypted else value
 
     def get_all_settings(self) -> Dict[str, Dict[str, str]]:
         """
@@ -826,10 +938,6 @@ class VideoDatabase:
         Returns:
             Dict mapping setting key to {value, type, description, encrypted}
         """
-        from src.utils.encryption import get_encryption
-
-        enc = get_encryption()
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -842,12 +950,11 @@ class VideoDatabase:
             for row in cursor.fetchall():
                 key, value, type_, encrypted, description = row
 
-                # Decrypt if needed
-                if encrypted:
-                    value = enc.decrypt(value)
+                # Decrypt if needed using helper method
+                decrypted_value = self._decrypt_value(value) if encrypted else value
 
                 settings[key] = {
-                    'value': value,
+                    'value': decrypted_value,
                     'type': type_,
                     'description': description or '',
                     'encrypted': bool(encrypted)
@@ -868,8 +975,6 @@ class VideoDatabase:
         Returns:
             True if successful
         """
-        from src.utils.encryption import get_encryption
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
@@ -879,10 +984,8 @@ class VideoDatabase:
 
             should_encrypt = encrypt if encrypt is not None else (row[0] if row else False)
 
-            # Encrypt if needed
-            if should_encrypt:
-                enc = get_encryption()
-                value = enc.encrypt(value)
+            # Encrypt if needed using helper method
+            final_value = self._encrypt_value(value) if should_encrypt else value
 
             cursor.execute("""
                 INSERT INTO settings (key, value, type, encrypted, description, updated_at)
@@ -891,7 +994,7 @@ class VideoDatabase:
                     value = excluded.value,
                     encrypted = excluded.encrypted,
                     updated_at = CURRENT_TIMESTAMP
-            """, (key, value, int(should_encrypt)))
+            """, (key, final_value, int(should_encrypt)))
 
             conn.commit()
             return True
@@ -908,9 +1011,6 @@ class VideoDatabase:
         Returns:
             Number of settings updated
         """
-        from src.utils.encryption import get_encryption
-
-        enc = get_encryption()
         updated_count = 0
 
         with self._get_connection() as conn:
@@ -928,8 +1028,8 @@ class VideoDatabase:
                 elif key in existing_encryption:
                     should_encrypt = existing_encryption[key]
 
-                # Encrypt if needed
-                final_value = enc.encrypt(value) if should_encrypt else value
+                # Encrypt if needed using helper method
+                final_value = self._encrypt_value(value) if should_encrypt else value
 
                 cursor.execute("""
                     INSERT INTO settings (key, value, type, encrypted, description, updated_at)
@@ -960,6 +1060,174 @@ class VideoDatabase:
             cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
             conn.commit()
             return cursor.rowcount > 0
+
+    # ========================
+    # Channels Management
+    # ========================
+
+    def get_all_channels(self) -> List[Dict[str, Any]]:
+        """
+        Get all channels from database.
+
+        Returns:
+            List of channel dicts with {channel_id, channel_name, enabled}
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT channel_id, channel_name, enabled, added_at, updated_at
+                FROM channels
+                ORDER BY channel_name
+            """)
+
+            channels = []
+            for row in cursor.fetchall():
+                channels.append({
+                    'channel_id': row[0],
+                    'channel_name': row[1],
+                    'enabled': bool(row[2]),
+                    'added_at': row[3],
+                    'updated_at': row[4]
+                })
+
+            return channels
+
+    def get_enabled_channels(self) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Get enabled channels in format compatible with ConfigManager.
+
+        Returns:
+            Tuple of (channel_ids list, channel_names dict)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT channel_id, channel_name
+                FROM channels
+                WHERE enabled = 1
+                ORDER BY channel_name
+            """)
+
+            channel_ids = []
+            channel_names = {}
+
+            for row in cursor.fetchall():
+                channel_id = row[0]
+                channel_name = row[1]
+                channel_ids.append(channel_id)
+                channel_names[channel_id] = channel_name
+
+            return channel_ids, channel_names
+
+    def add_channel(self, channel_id: str, channel_name: str = None) -> bool:
+        """
+        Add a channel to database.
+
+        Args:
+            channel_id: YouTube channel ID
+            channel_name: Optional display name
+
+        Returns:
+            True if added, False if already exists
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    INSERT INTO channels (channel_id, channel_name, enabled)
+                    VALUES (?, ?, 1)
+                """, (channel_id, channel_name or channel_id))
+                conn.commit()
+                return True
+
+            except sqlite3.IntegrityError:
+                # Already exists
+                return False
+
+    def remove_channel(self, channel_id: str) -> bool:
+        """
+        Remove a channel from database.
+
+        Args:
+            channel_id: YouTube channel ID
+
+        Returns:
+            True if removed, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_channel(self, channel_id: str, channel_name: str = None, enabled: bool = None) -> bool:
+        """
+        Update channel properties.
+
+        Args:
+            channel_id: YouTube channel ID
+            channel_name: Optional new name
+            enabled: Optional enabled status
+
+        Returns:
+            True if updated, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            updates = []
+            params = []
+
+            if channel_name is not None:
+                updates.append("channel_name = ?")
+                params.append(channel_name)
+
+            if enabled is not None:
+                updates.append("enabled = ?")
+                params.append(int(enabled))
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(channel_id)
+
+            query = f"UPDATE channels SET {', '.join(updates)} WHERE channel_id = ?"
+            cursor.execute(query, params)
+            conn.commit()
+
+            return cursor.rowcount > 0
+
+    def set_channels(self, channels: List[str], channel_names: Dict[str, str] = None) -> bool:
+        """
+        Replace all channels with new list.
+
+        Args:
+            channels: List of channel IDs
+            channel_names: Optional dict mapping channel_id to name
+
+        Returns:
+            True if successful
+        """
+        names = channel_names or {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Clear existing channels
+            cursor.execute("DELETE FROM channels")
+
+            # Insert new channels
+            for channel_id in channels:
+                channel_name = names.get(channel_id, channel_id)
+                cursor.execute("""
+                    INSERT INTO channels (channel_id, channel_name, enabled)
+                    VALUES (?, ?, 1)
+                """, (channel_id, channel_name))
+
+            conn.commit()
+            return True
 
 
 if __name__ == '__main__':
