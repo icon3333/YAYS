@@ -79,7 +79,7 @@ templates = Jinja2Templates(directory="src/templates")
 
 # Initialize config manager
 config_manager = ConfigManager('config.txt')
-settings_manager = SettingsManager('.env')
+settings_manager = SettingsManager('.env', 'data/videos.db')
 video_db = VideoDatabase('data/videos.db')
 export_manager = ExportManager('data/videos.db', 'config.txt', '.env')
 import_manager = ImportManager('data/videos.db', 'config.txt')
