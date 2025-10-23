@@ -253,6 +253,9 @@
                 </div>
             </div>
 
+            <!-- Status Message -->
+            <div id="settingsStatus" class="status"></div>
+
             <!-- Restart Notification -->
             <div id="restartNotification" class="restart-notification" style="display: none;">
                 Settings updated. Restart Docker containers to apply changes.
@@ -260,7 +263,7 @@
             </div>
 
             <!-- Save Button -->
-            <button onclick="saveAllSettings(event)" style="width: 100%; padding: 16px; font-size: 15px;">
+            <button onclick="saveAllSettings(this)" style="width: 100%; padding: 16px; font-size: 15px;">
                 Save Settings
             </button>
 
@@ -431,12 +434,18 @@
 
                 <div class="button-group">
                     <button class="btn-secondary" onclick="resetPrompt()">Reset to Default</button>
-                    <button onclick="savePrompt(event)">Save Prompt</button>
+                    <button onclick="savePrompt(this)">Save Prompt</button>
                 </div>
+
+                <!-- Status for Prompt -->
+                <div id="aiStatus" class="status"></div>
             </div>
 
+            <!-- Status for AI Credentials -->
+            <div id="aiSettingsStatus" class="status"></div>
+
             <!-- Save AI Credentials Button -->
-            <button onclick="saveAICredentials(event)" style="width: 100%; padding: 16px; font-size: 15px; margin-top: 20px;">
+            <button onclick="saveAICredentials(this)" style="width: 100%; padding: 16px; font-size: 15px; margin-top: var(--space-2);">
                 Save AI Settings
             </button>
         </div>

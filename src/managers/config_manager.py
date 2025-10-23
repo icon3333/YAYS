@@ -207,6 +207,54 @@ Transcript: {transcript}"""
 
         return imported
 
+    def export_channels(self) -> List[Dict[str, str]]:
+        """
+        Export channels for backup/export purposes.
+
+        Returns:
+            List of channel dicts with channel_id, channel_name
+        """
+        channels = self.db.get_all_channels()
+        return [
+            {
+                'channel_id': ch['channel_id'],
+                'channel_name': ch['channel_name']
+            }
+            for ch in channels
+        ]
+
+    def reset_all_settings(self) -> bool:
+        """
+        Reset all config settings to defaults.
+
+        Returns:
+            True if successful
+        """
+        default_settings = {
+            'SUMMARY_LENGTH': '500',
+            'USE_SUMMARY_LENGTH': 'false',
+            'SKIP_SHORTS': 'true',
+            'MAX_VIDEOS_PER_CHANNEL': '5',
+        }
+
+        try:
+            for key, value in default_settings.items():
+                self.db.set_setting(key, value)
+            return True
+        except Exception as e:
+            print(f"❌ Error resetting settings: {e}")
+            return False
+
+    def ensure_config_exists(self) -> bool:
+        """
+        Ensure configuration exists in database.
+        For backward compatibility - always returns True now.
+
+        Returns:
+            True
+        """
+        return True
+
 
 if __name__ == '__main__':
     # Test the config manager

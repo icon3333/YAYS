@@ -50,20 +50,20 @@ class ExportManager:
     def __init__(
         self,
         db_path: str = "data/videos.db",
-        config_path: str = "config.txt",
-        env_path: str = ".env",
+        config_path: str = "config.txt",  # Unused, kept for backward compatibility
+        env_path: str = ".env",  # Unused, kept for backward compatibility
     ):
         """
         Initialize ExportManager.
 
         Args:
             db_path: Path to SQLite database
-            config_path: Path to config.txt
-            env_path: Path to .env file
+            config_path: Unused, kept for backward compatibility
+            env_path: Unused, kept for backward compatibility
         """
         self.db = VideoDatabase(db_path)
-        self.config_manager = ConfigManager(config_path)
-        self.settings_manager = SettingsManager(env_path, db_path)
+        self.config_manager = ConfigManager(db_path=db_path)
+        self.settings_manager = SettingsManager(db_path=db_path)
 
     def export_feed_json(self) -> Dict[str, Any]:
         """
@@ -247,7 +247,7 @@ class ExportManager:
 
     def _get_settings(self) -> Dict[str, Any]:
         """
-        Extract non-secret settings from both config.txt and .env.
+        Extract non-secret settings from database.
 
         Excludes credentials for security.
 
@@ -257,33 +257,15 @@ class ExportManager:
         settings = {}
 
         try:
-            # Get video processing settings from config.txt
-            config_keys = [
-                "SUMMARY_LENGTH",
-                "USE_SUMMARY_LENGTH",
-                "SKIP_SHORTS",
-                "MAX_VIDEOS_PER_CHANNEL",
-                "CHECK_INTERVAL_MINUTES",
-                "MAX_FEED_ENTRIES",
-            ]
-
-            for key in config_keys:
-                value = self.config_manager.get_value("Settings", key, None)
-                if value is not None:
-                    # Convert string booleans to actual booleans
-                    if value.lower() in ("true", "false"):
-                        value = value.lower() == "true"
-                    # Convert string integers to actual integers
-                    elif value.isdigit():
-                        value = int(value)
-                    settings[key] = value
+            # Get all settings from database
+            all_settings = self.config_manager.get_settings()
 
             # Get AI prompt template
-            ai_prompt = self.config_manager.get_value("AI", "PROMPT_TEMPLATE", None)
+            ai_prompt = self.config_manager.get_prompt()
             if ai_prompt:
                 settings["ai_prompt_template"] = ai_prompt
 
-            # Get application settings from .env (exclude credentials)
+            # Get application settings (exclude credentials)
             env_settings = self.settings_manager.get_all_settings(mask_secrets=False)
             env_exported_count = 0
             for key, value in env_settings.items():
@@ -298,7 +280,28 @@ class ExportManager:
                 else:
                     logger.debug(f"Skipping credential: {key}")
 
-            logger.debug(f"Extracted {len(settings)} total settings: {len(config_keys)} from config.txt, {env_exported_count} from .env, {'1 AI prompt' if ai_prompt else '0 AI prompt'}")
+            # Add config settings (non-env settings)
+            config_keys = [
+                "SUMMARY_LENGTH",
+                "USE_SUMMARY_LENGTH",
+                "SKIP_SHORTS",
+                "MAX_VIDEOS_PER_CHANNEL",
+                "CHECK_INTERVAL_MINUTES",
+                "MAX_FEED_ENTRIES",
+            ]
+
+            for key in config_keys:
+                value = all_settings.get(key)
+                if value is not None:
+                    # Convert string booleans to actual booleans
+                    if isinstance(value, str) and value.lower() in ("true", "false"):
+                        value = value.lower() == "true"
+                    # Convert string integers to actual integers
+                    elif isinstance(value, str) and value.isdigit():
+                        value = int(value)
+                    settings[key] = value
+
+            logger.debug(f"Extracted {len(settings)} total settings from database")
             return settings
 
         except Exception as e:

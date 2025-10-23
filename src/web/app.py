@@ -74,15 +74,17 @@ class NoCacheStaticFiles(StarletteStaticFiles):
 
 app.mount("/static", NoCacheStaticFiles(directory="src/static", html=False), name="static")
 
-# Setup templates
+# Setup templates (disable auto_reload caching in production)
 templates = Jinja2Templates(directory="src/templates")
+templates.env.auto_reload = True
+templates.env.cache = None
 
 # Initialize managers (all use database now!)
-config_manager = ConfigManager('config.txt', 'data/videos.db')
-settings_manager = SettingsManager('.env', 'data/videos.db')
+config_manager = ConfigManager(db_path='data/videos.db')
+settings_manager = SettingsManager(db_path='data/videos.db')
 video_db = VideoDatabase('data/videos.db')
-export_manager = ExportManager('data/videos.db', 'config.txt', '.env')
-import_manager = ImportManager('data/videos.db', 'config.txt')
+export_manager = ExportManager(db_path='data/videos.db')
+import_manager = ImportManager(db_path='data/videos.db')
 ytdlp_client = YTDLPClient()
 youtube_client = YouTubeClient(use_ytdlp=True)
 
@@ -202,9 +204,9 @@ async def fetch_initial_videos(channel_id: str):
     """
     try:
         # Get settings
-        config = config_manager.read_config()
-        max_videos = int(config.get('settings', {}).get('MAX_VIDEOS_PER_CHANNEL', '5'))
-        skip_shorts = config.get('settings', {}).get('SKIP_SHORTS', 'true').lower() == 'true'
+        config_settings = config_manager.get_settings()
+        max_videos = int(config_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))
+        skip_shorts = config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
         logger.info(f"Fetching and processing last {max_videos} videos for new channel: {channel_id}")
 
@@ -378,9 +380,8 @@ async def get_settings():
         # Get .env settings (masked)
         env_settings = settings_manager.get_all_settings(mask_secrets=True)
 
-        # Get config.txt settings
-        config = config_manager.read_config()
-        config_settings = config.get('settings', {})
+        # Get config settings from database
+        config_settings = config_manager.get_settings()
 
         logger.info("Retrieved all settings")
 
@@ -415,7 +416,7 @@ async def update_settings(data: MultipleSettingsUpdate):
 
         results = {"env": None, "config": None, "restart_required": False}
 
-        # Update .env settings
+        # Update env settings (stored in database)
         if env_updates:
             logger.info(f"Updating {len(env_updates)} env settings: {list(env_updates.keys())}")
             success, message, errors = settings_manager.update_multiple_settings(env_updates)
@@ -423,15 +424,11 @@ async def update_settings(data: MultipleSettingsUpdate):
                 logger.error(f"Validation failed: {errors}")
                 raise HTTPException(status_code=400, detail={"message": message, "errors": errors})
 
-            # Reload environment variables so changes take effect immediately
-            load_dotenv(override=True)
-            logger.info("Reloaded environment variables from .env")
-
             results["env"] = message
             results["restart_required"] = True
-            logger.info(f"Updated .env settings: {list(env_updates.keys())}")
+            logger.info(f"Updated env settings in database: {list(env_updates.keys())}")
 
-        # Update config.txt settings
+        # Update config settings (stored in database)
         if config_updates:
             # Validate config settings before writing
             validation_errors = []
@@ -457,7 +454,7 @@ async def update_settings(data: MultipleSettingsUpdate):
                 logger.error(f"Config validation failed: {validation_errors}")
                 raise HTTPException(status_code=400, detail={"message": "Validation failed", "errors": validation_errors})
 
-            # Use config_manager.set_setting() for thread-safe updates with locking
+            # Update settings in database
             try:
                 updated_count = 0
                 for key, value in config_updates.items():
@@ -472,10 +469,10 @@ async def update_settings(data: MultipleSettingsUpdate):
                         logger.warning(f"Failed to update config setting: {key}")
 
                 results["config"] = f"Updated {updated_count} config settings"
-                logger.info(f"Updated config.txt settings: {list(config_updates.keys())}")
+                logger.info(f"Updated config settings in database: {list(config_updates.keys())}")
 
             except Exception as e:
-                logger.error(f"Error updating config.txt: {e}")
+                logger.error(f"Error updating config settings: {e}")
                 raise HTTPException(status_code=500, detail=f"Failed to update config: {str(e)}")
 
         return results
@@ -491,8 +488,7 @@ async def update_settings(data: MultipleSettingsUpdate):
 async def get_prompt():
     """Get the current prompt template"""
     try:
-        config = config_manager.read_config()
-        prompt = config.get('prompt', '')
+        prompt = config_manager.get_prompt()
 
         logger.info("Retrieved prompt template")
 
@@ -590,10 +586,10 @@ async def get_openai_models():
     try:
         import openai
 
-        # Reload environment to get latest saved API key
-        load_dotenv(override=True)
+        # Get API key from database (via settings manager)
+        all_settings = settings_manager.get_all_settings(mask_secrets=False)
+        api_key = all_settings.get('OPENAI_API_KEY', {}).get('value', '')
 
-        api_key = os.getenv('OPENAI_API_KEY', '')
         if not api_key:
             # Return a default list if no API key is configured
             return {
@@ -611,22 +607,45 @@ async def get_openai_models():
         client = openai.OpenAI(api_key=api_key)
         models_response = client.models.list()
 
-        # Filter for chat models (GPT models)
+        # Filter for text/chat models only (exclude image, audio, embedding, moderation, etc.)
         chat_models = []
         model_priorities = {
             "gpt-4o": 1,
             "gpt-4o-mini": 2,
             "gpt-4-turbo": 3,
             "gpt-4": 4,
-            "gpt-3.5-turbo": 5
+            "gpt-3.5-turbo": 5,
+            "o1": 6,
+            "o3": 7
         }
 
         for model in models_response.data:
             model_id = model.id
-            # Include only GPT chat models
-            if model_id.startswith("gpt-") and not model_id.endswith("-instruct"):
+            model_id_lower = model_id.lower()
+
+            # Include only text/chat models
+            is_text_model = (
+                # GPT chat models (exclude instruct variants)
+                (model_id_lower.startswith("gpt-") and not model_id_lower.endswith("-instruct")) or
+                # o1 and o3 reasoning models
+                model_id_lower.startswith("o1") or
+                model_id_lower.startswith("o3")
+            )
+
+            # Exclude non-text models
+            is_excluded = (
+                "dall-e" in model_id_lower or
+                "whisper" in model_id_lower or
+                "tts" in model_id_lower or
+                "embedding" in model_id_lower or
+                "moderation" in model_id_lower or
+                "vision" in model_id_lower or
+                "audio" in model_id_lower
+            )
+
+            if is_text_model and not is_excluded:
                 # Use base model name for priority
-                base_name = model_id.split("-")[0] + "-" + model_id.split("-")[1]
+                base_name = model_id.split("-")[0] + "-" + model_id.split("-")[1] if "-" in model_id else model_id
                 if "turbo" in model_id:
                     base_name += "-turbo"
                 elif "mini" in model_id:
@@ -676,15 +695,15 @@ async def get_openai_models():
 
 @app.post("/api/settings/test")
 async def test_credentials(data: CredentialTest):
-    """Test API credentials using provided values or saved values from .env"""
+    """Test API credentials using provided values or saved values from database"""
     try:
         if data.credential_type == 'openai':
-            # Reload environment to get latest saved values
-            load_dotenv(override=True)
+            # Get API key from database or use provided value
+            all_settings = settings_manager.get_all_settings(mask_secrets=False)
+            saved_api_key = all_settings.get('OPENAI_API_KEY', {}).get('value', '')
 
-            # Use provided value or fall back to .env
-            # Handle None and empty string
-            api_key = data.test_value if data.test_value else os.getenv('OPENAI_API_KEY', '')
+            # Use provided value or fall back to database
+            api_key = data.test_value if data.test_value else saved_api_key
             api_key = api_key.strip() if api_key else ''
 
             if not api_key:
@@ -702,15 +721,15 @@ async def test_credentials(data: CredentialTest):
             }
 
         elif data.credential_type == 'smtp':
-            # Reload environment to get latest saved values
-            load_dotenv(override=True)
+            # Get SMTP credentials from database or use provided values
+            all_settings = settings_manager.get_all_settings(mask_secrets=False)
+            saved_smtp_user = all_settings.get('SMTP_USER', {}).get('value', '')
+            saved_smtp_pass = all_settings.get('SMTP_PASS', {}).get('value', '')
 
-            # Use provided values or fall back to .env
-            # Handle None and empty string
             logger.debug(f"SMTP test request - test_user: {data.test_user}, test_pass: {'[present]' if data.test_pass else '[empty]'}")
 
-            smtp_user = data.test_user if data.test_user else os.getenv('SMTP_USER', '')
-            smtp_pass = data.test_pass if data.test_pass else os.getenv('SMTP_PASS', '')
+            smtp_user = data.test_user if data.test_user else saved_smtp_user
+            smtp_pass = data.test_pass if data.test_pass else saved_smtp_pass
             smtp_user = smtp_user.strip() if smtp_user else ''
             smtp_pass = smtp_pass.strip() if smtp_pass else ''
 
@@ -1125,8 +1144,8 @@ async def add_single_video(data: SingleVideoAdd):
             upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
 
         # Check if it's a short (respect SKIP_SHORTS setting)
-        config = config_manager.read_config()
-        skip_shorts = config.get('settings', {}).get('SKIP_SHORTS', 'true').lower() == 'true'
+        config_settings = config_manager.get_settings()
+        skip_shorts = config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
         if skip_shorts and duration_seconds and duration_seconds < 60:
             raise HTTPException(

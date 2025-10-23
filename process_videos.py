@@ -11,11 +11,6 @@ from datetime import datetime
 from time import sleep
 from typing import Dict
 
-from dotenv import load_dotenv
-
-# Load environment variables (override=True to force reload)
-load_dotenv(override=True)
-
 # Import core modules
 from src.core.youtube import YouTubeClient
 from src.core.transcript import TranscriptExtractor
@@ -28,7 +23,8 @@ from src.core.constants import (
 )
 
 # Import managers
-from src.managers.config_manager import ConfigManager, ProcessedVideos
+from src.managers.config_manager import ConfigManager
+from src.managers.settings_manager import SettingsManager
 from src.managers.database import VideoDatabase
 
 # Import utilities
@@ -88,16 +84,24 @@ class VideoProcessor:
         self.logger.info("YouTube Summarizer v2.0 Initializing")
         self.logger.info("="*60)
 
-        # Load configuration
-        self.config_manager = ConfigManager('config.txt')
-        self.config = self.config_manager.read_config()
-        self.logger.info(f"Loaded config: {len(self.config['channels'])} channels")
+        # Initialize database and managers
+        self.db = VideoDatabase('data/videos.db')
+        self.config_manager = ConfigManager(db_path='data/videos.db')
+        self.settings_manager = SettingsManager(db_path='data/videos.db')
 
-        # Load and validate environment variables
-        self.openai_key = os.getenv('OPENAI_API_KEY')
-        self.target_email = os.getenv('TARGET_EMAIL')
-        self.smtp_user = os.getenv('SMTP_USER')
-        self.smtp_pass = os.getenv('SMTP_PASS')
+        # Load configuration from database
+        channels, channel_names = self.config_manager.get_channels()
+        self.logger.info(f"Loaded config: {len(channels)} channels")
+
+        # Get settings from database
+        all_settings = self.settings_manager.get_all_settings(mask_secrets=False)
+        config_settings = self.config_manager.get_settings()
+
+        # Load and validate credentials from database
+        self.openai_key = all_settings.get('OPENAI_API_KEY', {}).get('value', '')
+        self.target_email = all_settings.get('TARGET_EMAIL', {}).get('value', '')
+        self.smtp_user = all_settings.get('SMTP_USER', {}).get('value', '')
+        self.smtp_pass = all_settings.get('SMTP_PASS', {}).get('value', '')
 
         missing = []
         if not self.openai_key:
@@ -110,11 +114,10 @@ class VideoProcessor:
             missing.append('SMTP_PASS')
 
         if missing:
-            self.logger.error("Missing required environment variables:")
+            self.logger.error("Missing required settings in database:")
             for var in missing:
                 self.logger.error(f"  - {var}")
-            self.logger.error("Please check your .env file and restart")
-            self.logger.error("See .env.example for required variables")
+            self.logger.error("Please configure settings using the web UI and restart")
             sys.exit(1)
 
         # Validate email format
@@ -123,28 +126,22 @@ class VideoProcessor:
             sys.exit(1)
 
         # Initialize components
-        use_ytdlp = self.config['settings'].get('USE_YTDLP', 'true').lower() == 'true'
+        use_ytdlp = True  # Always use ytdlp
 
         self.youtube_client = YouTubeClient(use_ytdlp=use_ytdlp)
         self.transcript_extractor = TranscriptExtractor()
 
-        # Get model from environment or use default
-        openai_model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+        # Get model from database or use default
+        openai_model = all_settings.get('OPENAI_MODEL', {}).get('value', 'gpt-4o-mini')
         self.summarizer = AISummarizer(self.openai_key, model=openai_model)
         self.email_sender = EmailSender(self.smtp_user, self.smtp_pass, self.target_email)
 
-        # Setup processed videos tracking (legacy)
-        max_entries = int(os.getenv('MAX_PROCESSED_ENTRIES', '10000'))
-        self.processed = ProcessedVideos(
-            file_path='data/processed.txt',
-            max_entries=max_entries,
-            keep_entries=max_entries // 2
-        )
-        stats = self.processed.get_stats()
-        self.logger.info(f"Loaded {stats['total']} processed videos (legacy)")
+        # Store channels and settings for later use
+        self.channels = channels
+        self.channel_names = channel_names
+        self.config_settings = config_settings
+        self.send_email = all_settings.get('SEND_EMAIL_SUMMARIES', {}).get('value', 'true').lower() == 'true'
 
-        # Initialize database
-        self.db = VideoDatabase('data/videos.db')
         self.logger.info("Database initialized")
 
         # Statistics
@@ -229,13 +226,14 @@ class VideoProcessor:
             video['duration_string'] = duration
 
         # STEP 2: Generate AI summary
-        use_summary_length = self.config['settings'].get('USE_SUMMARY_LENGTH', 'false') == 'true'
-        max_tokens = int(self.config['settings'].get('SUMMARY_LENGTH', '500')) if use_summary_length else None
+        use_summary_length = self.config_settings.get('USE_SUMMARY_LENGTH', 'false') == 'true'
+        max_tokens = int(self.config_settings.get('SUMMARY_LENGTH', '500')) if use_summary_length else None
+        prompt_template = self.config_manager.get_prompt()
         summary = self.summarizer.summarize_with_retry(
             video=video,
             transcript=transcript,
             duration=video['duration_string'],
-            prompt_template=self.config['prompt'],
+            prompt_template=prompt_template,
             max_tokens=max_tokens
         )
 
@@ -263,9 +261,7 @@ class VideoProcessor:
         self.logger.info(f"      ✅ Summary generated ({len(summary)} chars)")
 
         # STEP 4: Optionally send email
-        send_email = os.getenv('SEND_EMAIL_SUMMARIES', 'true').lower() == 'true'
-
-        if send_email:
+        if self.send_email:
             if self.email_sender.send_email(video, summary, channel_name):
                 self.db.update_video_processing(video['id'], status=STATUS_SUCCESS, email_sent=True)
                 self.stats['email_sent'] += 1
@@ -283,8 +279,7 @@ class VideoProcessor:
         else:
             self.logger.info(f"      📝 Email disabled (summary saved only)")
 
-        # Mark as processed (legacy tracking)
-        self.processed.mark_processed(video['id'])
+        # Statistics
         self.stats['videos_processed'] += 1
 
         # Rate limiting
@@ -298,18 +293,18 @@ class VideoProcessor:
         self.logger.info(f"Starting processing run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info("="*60)
 
-        if not self.config['channels']:
+        if not self.channels:
             self.logger.warning("No channels configured!")
-            self.logger.warning("Add channels to config.txt or use the web UI")
+            self.logger.warning("Add channels using the web UI")
             return
 
         # Get settings
-        max_videos = int(self.config['settings'].get('MAX_VIDEOS_PER_CHANNEL', '5'))
-        skip_shorts = self.config['settings'].get('SKIP_SHORTS', 'true').lower() == 'true'
+        max_videos = int(self.config_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))
+        skip_shorts = self.config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
         # Process each channel
-        for channel_id in self.config['channels']:
-            channel_name = self.config['channel_names'].get(channel_id, channel_id)
+        for channel_id in self.channels:
+            channel_name = self.channel_names.get(channel_id, channel_id)
             self.logger.info(f"📡 Checking: {channel_name}")
 
             videos = self.youtube_client.get_channel_videos(
@@ -354,10 +349,6 @@ class VideoProcessor:
         self.logger.info(f"   📊 API Calls: {self.stats['api_calls']}")
         estimated_cost = self.stats['api_calls'] * 0.0014  # Rough estimate
         self.logger.info(f"   💰 Estimated Cost: ${estimated_cost:.4f}")
-
-        # Log processed stats
-        proc_stats = self.processed.get_stats()
-        self.logger.info(f"   📝 Total Processed: {proc_stats['total']}/{proc_stats['max']}")
 
         self.logger.info("="*60)
         self.logger.info("")

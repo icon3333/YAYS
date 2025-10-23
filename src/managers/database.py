@@ -137,8 +137,8 @@ class VideoDatabase:
         # Run migrations to add new tables/columns to existing databases
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
-        self._migrate_add_settings_table()
-        self._migrate_add_channels_table()
+        self._ensure_settings_table()
+        self._ensure_channels_table()
 
     def _migrate_add_source_type(self):
         """
@@ -182,12 +182,12 @@ class VideoDatabase:
 
             conn.commit()
 
-    def _migrate_add_settings_table(self):
+    def _ensure_settings_table(self):
         """
-        Migration: Add settings table for database-backed configuration
+        Ensure settings table exists for database-backed configuration.
 
-        This migration creates a settings table to store ALL application settings
-        in the database, including encrypted secrets. No more .env file writes!
+        Creates a settings table to store ALL application settings
+        in the database, including encrypted secrets.
 
         Secrets are encrypted at rest using Fernet symmetric encryption.
         """
@@ -220,7 +220,7 @@ class VideoDatabase:
             # Initialize default settings if table is empty
             cursor.execute("SELECT COUNT(*) FROM settings")
             if cursor.fetchone()[0] == 0:
-                # Note: Secrets start empty, users must configure them
+                # Note: Secrets start empty, users must configure them via web UI
                 default_settings = [
                     ('OPENAI_API_KEY', '', 'secret', 1, 'OpenAI API Key (encrypted)'),
                     ('SMTP_PASS', '', 'secret', 1, 'Gmail app password (encrypted)'),
@@ -240,94 +240,11 @@ class VideoDatabase:
 
             conn.commit()
 
-        # Run migration to import .env settings if they exist
-        self._migrate_import_env_to_db()
-
-    def _migrate_import_env_to_db(self):
+    def _ensure_channels_table(self):
         """
-        Migration: Import existing .env settings to database (one-time)
+        Ensure channels table exists for database-backed channel management.
 
-        This migration reads .env file and imports all settings to database.
-        Secrets are encrypted before storage.
-        Only runs if settings are still empty (hasn't been migrated yet).
-        """
-        env_path = '.env'
-        if not os.path.exists(env_path):
-            return  # No .env file to migrate
-
-        # Check if migration already happened (any non-empty settings)
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM settings WHERE value != ''")
-            if cursor.fetchone()[0] > 0:
-                return  # Already migrated
-
-            # Parse .env file
-            env_vars = {}
-            try:
-                with open(env_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        if '=' in line:
-                            key, value = line.split('=', 1)
-                            key = key.strip()
-                            value = value.strip().strip('"').strip("'")
-                            env_vars[key] = value
-            except Exception as e:
-                print(f"⚠️ Failed to parse .env for migration: {e}")
-                return
-
-            if not env_vars:
-                return  # Nothing to migrate
-
-            # Define which keys should be encrypted
-            encrypted_keys = {'OPENAI_API_KEY', 'SMTP_PASS'}
-
-            # Import settings to database
-            imported = 0
-            for key, value in env_vars.items():
-                if not value:
-                    continue  # Skip empty values
-
-                try:
-                    # Check if this key exists in settings table
-                    cursor.execute("SELECT encrypted FROM settings WHERE key = ?", (key,))
-                    row = cursor.fetchone()
-
-                    if row is not None:
-                        # Update existing setting
-                        should_encrypt = row[0] or (key in encrypted_keys)
-
-                        # Encrypt if needed using helper method
-                        final_value = self._encrypt_value(value) if should_encrypt else value
-
-                        cursor.execute("""
-                            UPDATE settings
-                            SET value = ?, encrypted = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE key = ?
-                        """, (final_value, int(should_encrypt), key))
-
-                        imported += 1
-
-                except Exception as e:
-                    print(f"⚠️ Failed to migrate setting {key}: {e}")
-                    continue
-
-            conn.commit()
-
-            if imported > 0:
-                print(f"✅ Migrated {imported} settings from .env to database")
-                print(f"   Secrets are now encrypted in database")
-                print(f"   .env file is no longer needed for runtime (but kept for backup)")
-
-    def _migrate_add_channels_table(self):
-        """
-        Migration: Add channels table for database-backed channel management
-
-        This migration creates a channels table to store monitored YouTube channels.
-        Eliminates config.txt for channel storage!
+        Creates a channels table to store monitored YouTube channels.
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -343,7 +260,7 @@ class VideoDatabase:
                 )
             """)
 
-            # Add config.txt settings that belong here
+            # Add config settings to settings table
             cursor.execute("""
                 INSERT OR IGNORE INTO settings (key, value, type, encrypted, description)
                 VALUES
@@ -356,86 +273,6 @@ class VideoDatabase:
             """)
 
             conn.commit()
-
-        # Run migration to import config.txt if it exists
-        self._migrate_import_config_to_db()
-
-    def _migrate_import_config_to_db(self):
-        """
-        Migration: Import existing config.txt to database (one-time)
-
-        This migration reads config.txt and imports:
-        - Channels → channels table
-        - AI Prompt → settings table
-        - Settings → settings table
-
-        Only runs if channels table is empty (hasn't been migrated yet).
-        """
-        import os
-
-        config_path = 'config.txt'
-        if not os.path.exists(config_path):
-            return  # No config.txt to migrate
-
-        # Check if migration already happened (any channels exist)
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM channels")
-            if cursor.fetchone()[0] > 0:
-                return  # Already migrated
-
-            # Parse config.txt
-            try:
-                from src.managers.config_manager import ConfigManager
-                config_mgr = ConfigManager(config_path)
-                config = config_mgr.read_config()
-
-                imported_channels = 0
-                imported_settings = 0
-
-                # Import channels
-                for channel_id in config.get('channels', []):
-                    channel_name = config.get('channel_names', {}).get(channel_id, channel_id)
-                    try:
-                        cursor.execute("""
-                            INSERT INTO channels (channel_id, channel_name, enabled)
-                            VALUES (?, ?, 1)
-                        """, (channel_id, channel_name))
-                        imported_channels += 1
-                    except Exception as e:
-                        print(f"⚠️ Failed to migrate channel {channel_id}: {e}")
-
-                # Import AI prompt
-                prompt = config.get('prompt', '')
-                if prompt:
-                    try:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description)
-                            VALUES ('ai_prompt_template', ?, 'text', 0, 'AI prompt template for summarization')
-                        """, (prompt,))
-                        imported_settings += 1
-                    except Exception as e:
-                        print(f"⚠️ Failed to migrate prompt: {e}")
-
-                # Import config.txt settings
-                for key, value in config.get('settings', {}).items():
-                    try:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO settings (key, value, type, encrypted, description, updated_at)
-                            VALUES (?, ?, 'text', 0, '', CURRENT_TIMESTAMP)
-                        """, (key, value))
-                        imported_settings += 1
-                    except Exception as e:
-                        print(f"⚠️ Failed to migrate setting {key}: {e}")
-
-                conn.commit()
-
-                if imported_channels > 0 or imported_settings > 0:
-                    print(f"✅ Migrated {imported_channels} channels and {imported_settings} settings from config.txt to database")
-                    print(f"   config.txt is no longer needed for runtime (but kept for backup)")
-
-            except Exception as e:
-                print(f"⚠️ Failed to parse config.txt for migration: {e}")
 
     def is_processed(self, video_id: str) -> bool:
         """Check if video has been processed"""

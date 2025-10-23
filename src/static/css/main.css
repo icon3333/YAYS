@@ -562,7 +562,7 @@
             background: var(--white);
             border: 1px solid var(--grey-200);
             padding: var(--space-4);
-            margin-bottom: var(--space-3);
+            margin-bottom: var(--space-2);
         }
 
         .settings-section h3 {
@@ -788,6 +788,18 @@
             grid-template-columns: 1fr;
         }
 
+        /* Remove extra spacing before save buttons */
+        #tab-settings .settings-section:last-of-type,
+        #tab-ai .settings-section:last-of-type {
+            margin-bottom: 0;
+        }
+
+        /* Remove margin from status divs before save buttons */
+        #settingsStatus,
+        #aiSettingsStatus {
+            margin-bottom: 0;
+        }
+
         /* ========================================
            CHANNELS PAGE SPECIFIC STYLES
            ======================================== */
@@ -941,13 +953,22 @@
             color: var(--grey-300);
         }
 
-        /* Manual badge for videos added via Quick Add Video feature */
-        /* Displays "Manual" next to channel name with subtle italic styling */
-        .manual-badge {
-            color: var(--grey-600);
+        /* Source type badges for videos */
+        /* Shows whether video was added manually or via channel */
+        .source-badge {
             font-weight: 500;
-            font-size: 11px;
+            font-size: 10px;
             font-style: italic;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .source-badge-manual {
+            color: var(--grey-600);
+        }
+
+        .source-badge-channel {
+            color: var(--grey-400);
         }
 
         /* Mobile adjustments for channel cards */

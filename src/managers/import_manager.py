@@ -113,20 +113,20 @@ class ImportManager:
     def __init__(
         self,
         db_path: str = "data/videos.db",
-        config_path: str = "config.txt",
-        env_path: str = ".env",
+        config_path: str = "config.txt",  # Unused, kept for backward compatibility
+        env_path: str = ".env",  # Unused, kept for backward compatibility
     ):
         """
         Initialize ImportManager.
 
         Args:
             db_path: Path to SQLite database
-            config_path: Path to config.txt
-            env_path: Path to .env file
+            config_path: Unused, kept for backward compatibility
+            env_path: Unused, kept for backward compatibility
         """
         self.db = VideoDatabase(db_path)
-        self.config_manager = ConfigManager(config_path)
-        self.settings_manager = SettingsManager(env_path, db_path)
+        self.config_manager = ConfigManager(db_path=db_path)
+        self.settings_manager = SettingsManager(db_path=db_path)
 
     def validate_import_file(self, data: Dict[str, Any]) -> ValidationResult:
         """
@@ -324,14 +324,8 @@ class ImportManager:
         videos_added = 0
         settings_updated = 0
 
-        # Create backup timestamp
-        backup_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-
         try:
-            # Step 1: Create backups
-            config_backup = self._create_config_backup(backup_suffix)
-
-            # Step 2: Import channels (merge)
+            # Step 1: Import channels (merge)
             try:
                 channels = data.get("channels", [])
                 channels_added = self.config_manager.import_channels(channels, merge=True)
@@ -341,11 +335,9 @@ class ImportManager:
                 error_msg = f"Failed to import channels: {e}"
                 logger.error(error_msg)
                 errors.append(error_msg)
-                # Restore config from backup
-                self._restore_config_backup(config_backup)
                 raise
 
-            # Step 3: Import videos (skip duplicates)
+            # Step 2: Import videos (skip duplicates)
             try:
                 videos = data.get("videos", [])
                 videos_added = self.db.bulk_insert_videos(videos, skip_duplicates=True)
@@ -355,11 +347,9 @@ class ImportManager:
                 error_msg = f"Failed to import videos: {e}"
                 logger.error(error_msg)
                 errors.append(error_msg)
-                # Restore config from backup (channels already added)
-                self._restore_config_backup(config_backup)
                 raise
 
-            # Step 4: Import settings (if Complete Backup)
+            # Step 3: Import settings (if Complete Backup)
             if data.get("export_level") == "complete":
                 try:
                     settings = data.get("settings", {})
@@ -384,54 +374,52 @@ class ImportManager:
                     if skipped_credentials:
                         logger.info(f"Skipped {len(skipped_credentials)} credentials for security: {skipped_credentials}")
 
-                    # Separate config.txt settings from .env settings
-                    config_settings = {}
-                    env_settings = {}
-
-                    # Config.txt settings
-                    config_keys = {
-                        "SUMMARY_LENGTH", "USE_SUMMARY_LENGTH", "SKIP_SHORTS",
-                        "MAX_VIDEOS_PER_CHANNEL", "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
-                    }
+                    # All settings go to database now
+                    database_settings = {}
 
                     for key, value in filtered_settings.items():
                         if key == "ai_prompt_template":
                             # Handle AI prompt separately
                             self.config_manager.set_prompt(value)
                             settings_updated += 1
-                        elif key in config_keys:
-                            config_settings[key] = value
                         else:
-                            # Everything else goes to .env
-                            env_settings[key] = value
+                            database_settings[key] = value
 
-                    # Import config.txt settings
-                    if config_settings:
-                        count = self.config_manager.import_settings(config_settings)
-                        settings_updated += count
-                        logger.info(f"Imported {count} config.txt settings")
-
-                    # Import .env settings
-                    if env_settings:
+                    # Import all settings to database
+                    if database_settings:
                         # Filter out empty values (don't overwrite existing settings with empty strings)
-                        non_empty_env_settings = {k: v for k, v in env_settings.items() if v}
+                        non_empty_settings = {k: v for k, v in database_settings.items() if v}
 
-                        if not non_empty_env_settings:
-                            logger.info("All .env settings in import are empty, skipping")
+                        if not non_empty_settings:
+                            logger.info("All settings in import are empty, skipping")
                         else:
-                            logger.info(f"Attempting to import {len(non_empty_env_settings)} .env settings: {list(non_empty_env_settings.keys())}")
-                            success, message, import_errors = self.settings_manager.update_multiple_settings(non_empty_env_settings)
-                            if success:
-                                settings_updated += len(non_empty_env_settings)
-                                logger.info(f"✅ Successfully imported {len(non_empty_env_settings)} .env settings")
-                            else:
-                                logger.warning(f"⚠️ Some .env settings failed: {message}")
-                                if import_errors:
-                                    for error in import_errors:
-                                        logger.warning(f"  - {error}")
-                                # Don't fail the whole import, just log warnings
+                            logger.info(f"Attempting to import {len(non_empty_settings)} settings to database")
+
+                            # Try config settings first
+                            config_keys = {
+                                "SUMMARY_LENGTH", "USE_SUMMARY_LENGTH", "SKIP_SHORTS",
+                                "MAX_VIDEOS_PER_CHANNEL", "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
+                            }
+                            config_settings = {k: v for k, v in non_empty_settings.items() if k in config_keys}
+                            env_settings = {k: v for k, v in non_empty_settings.items() if k not in config_keys}
+
+                            if config_settings:
+                                count = self.config_manager.import_settings(config_settings)
+                                settings_updated += count
+                                logger.info(f"Imported {count} config settings")
+
+                            if env_settings:
+                                success, message, import_errors = self.settings_manager.update_multiple_settings(env_settings)
+                                if success:
+                                    settings_updated += len(env_settings)
+                                    logger.info(f"✅ Successfully imported {len(env_settings)} env settings")
+                                else:
+                                    logger.warning(f"⚠️ Some env settings failed: {message}")
+                                    if import_errors:
+                                        for error in import_errors:
+                                            logger.warning(f"  - {error}")
                     else:
-                        logger.info("No .env settings to import")
+                        logger.info("No settings to import")
 
                     logger.info(f"Imported total {settings_updated} settings")
 
@@ -439,8 +427,6 @@ class ImportManager:
                     error_msg = f"Failed to import settings: {e}"
                     logger.error(error_msg)
                     errors.append(error_msg)
-                    # Restore config from backup
-                    self._restore_config_backup(config_backup)
                     raise
 
             # Success!
@@ -613,51 +599,3 @@ class ImportManager:
 
         # YouTube video IDs are 11 characters: alphanumeric, dash, underscore
         return bool(re.match(r"^[\w-]{11}$", video_id))
-
-    def _create_config_backup(self, suffix: str) -> Optional[str]:
-        """
-        Create backup of config file.
-
-        Args:
-            suffix: Backup filename suffix (timestamp)
-
-        Returns:
-            Path to backup file or None if backup failed
-        """
-        try:
-            config_path = self.config_manager.config_path
-            backup_path = f"{config_path}.backup.{suffix}"
-
-            if os.path.exists(config_path):
-                shutil.copy2(config_path, backup_path)
-                logger.info(f"Created config backup: {backup_path}")
-                return backup_path
-
-        except Exception as e:
-            logger.warning(f"Failed to create config backup: {e}")
-
-        return None
-
-    def _restore_config_backup(self, backup_path: Optional[str]) -> bool:
-        """
-        Restore config from backup file.
-
-        Args:
-            backup_path: Path to backup file
-
-        Returns:
-            True if restored successfully
-        """
-        if not backup_path or not os.path.exists(backup_path):
-            logger.warning("No backup to restore from")
-            return False
-
-        try:
-            config_path = self.config_manager.config_path
-            shutil.copy2(backup_path, config_path)
-            logger.info(f"Restored config from backup: {backup_path}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to restore config from backup: {e}")
-            return False

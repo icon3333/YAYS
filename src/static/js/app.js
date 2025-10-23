@@ -566,11 +566,11 @@
                     const div = document.createElement('div');
                     div.className = 'video-item';
 
-                    // Add "• Manual" badge for manually added videos
-                    // Videos added via Quick Add Video feature show a visual indicator
-                    const manualBadge = video.source_type === 'via_manual'
-                        ? '<span class="meta-separator">•</span><span class="manual-badge">Manual</span>'
-                        : '';
+                    // Add source type badge for all videos
+                    // Shows whether video was added manually or automatically via channel
+                    const sourceBadge = video.source_type === 'via_manual'
+                        ? '<span class="meta-separator">•</span><span class="source-badge source-badge-manual">Manual</span>'
+                        : '<span class="meta-separator">•</span><span class="source-badge source-badge-channel">Channel</span>';
 
                     div.innerHTML = `
                         <div class="video-header">
@@ -583,7 +583,7 @@
                         </div>
                         <div class="video-meta">
                             <span class="video-channel">${escapeHtml(video.channel_name)}</span>
-                            ${manualBadge}
+                            ${sourceBadge}
                             <span class="meta-separator">•</span>
                             <span class="video-date">${escapeHtml(video.upload_date_formatted)}</span>
                             <span class="meta-separator">•</span>
@@ -777,13 +777,17 @@
             }
         }
 
-        async function loadOpenAIModels() {
+        async function loadOpenAIModels(preserveSelection = false) {
             try {
+                const modelSelect = document.getElementById('OPENAI_MODEL');
+
+                // Save current selection if requested
+                const currentSelection = preserveSelection ? modelSelect.value : null;
+
                 const response = await fetch('/api/openai/models');
                 if (!response.ok) throw new Error('Failed to load models');
 
                 const data = await response.json();
-                const modelSelect = document.getElementById('OPENAI_MODEL');
 
                 // Clear existing options
                 modelSelect.innerHTML = '';
@@ -816,12 +820,22 @@
                     modelSelect.appendChild(option);
                 });
 
+                // Restore previous selection if it still exists in the new list
+                if (preserveSelection && currentSelection) {
+                    const modelExists = textModels.some(m => m.id === currentSelection);
+                    if (modelExists) {
+                        modelSelect.value = currentSelection;
+                    }
+                }
+
                 console.log(`Loaded ${textModels.length} text models (filtered from ${data.models.length} total) from ${data.source}`);
 
             } catch (error) {
                 console.error('Failed to load OpenAI models:', error);
                 // Add default fallback options
                 const modelSelect = document.getElementById('OPENAI_MODEL');
+                const currentSelection = preserveSelection ? modelSelect.value : null;
+
                 modelSelect.innerHTML = `
                     <option value="gpt-4o">GPT-4o (Latest, Most Capable)</option>
                     <option value="gpt-4o-mini">GPT-4o Mini (Fast & Affordable)</option>
@@ -829,19 +843,28 @@
                     <option value="gpt-4">GPT-4</option>
                     <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
                 `;
+
+                // Try to restore selection
+                if (preserveSelection && currentSelection) {
+                    const option = modelSelect.querySelector(`option[value="${currentSelection}"]`);
+                    if (option) {
+                        modelSelect.value = currentSelection;
+                    }
+                }
             }
         }
 
         async function loadSettings() {
             try {
-                // Load OpenAI models first
-                await loadOpenAIModels();
-
+                // Load settings first to get the saved OPENAI_MODEL value
                 const response = await fetch('/api/settings');
                 if (!response.ok) throw new Error('Failed to load settings');
 
                 const data = await response.json();
                 allSettings = data;
+
+                // Load OpenAI models (this will populate the dropdown)
+                await loadOpenAIModels();
 
                 // Populate .env settings
                 for (const [key, info] of Object.entries(data.env)) {
@@ -856,6 +879,19 @@
                                 element.placeholder = 'Enter new key to update';
                             } else {
                                 element.placeholder = (key === 'OPENAI_API_KEY' ? 'sk-...' : '16-character app password');
+                            }
+                        }
+                    } else if (key === 'OPENAI_MODEL') {
+                        // Handle OPENAI_MODEL separately - set after models are loaded
+                        if (element && info.value) {
+                            // Check if the saved model exists in the dropdown
+                            const option = element.querySelector(`option[value="${info.value}"]`);
+                            if (option) {
+                                element.value = info.value;
+                                console.log(`Set OPENAI_MODEL to saved value: ${info.value}`);
+                            } else {
+                                // Saved model not available, keep first option selected
+                                console.warn(`Saved model "${info.value}" not found in available models, using default: ${element.value}`);
                             }
                         }
                     } else if (element) {
@@ -892,7 +928,7 @@
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
             if (autoHide) {
-                setTimeout(() => status.classList.remove('show'), isError ? 5000 : 2000);
+                setTimeout(() => status.classList.remove('show'), isError ? 5000 : 3000);
             }
         }
 
@@ -907,8 +943,9 @@
             setTimeout(() => status.classList.remove('show'), 5000);
         }
 
-        async function saveAllSettings(event) {
-            const button = event ? event.target : null;
+        async function saveAllSettings(buttonElement) {
+            const button = buttonElement;
+            console.log('🔍 DEBUG: saveAllSettings called with button:', button);
 
             try {
                 const settingsToSave = {};
@@ -972,9 +1009,7 @@
                     showButtonConfirmation(button, '✓ Saved!');
                 }
 
-                showSettingsStatus('✅ Settings saved successfully', false);
-
-                // Show restart notification after success message disappears
+                // Show restart notification after button confirmation completes
                 if (result.restart_required) {
                     setTimeout(() => {
                         showRestartNotification();
@@ -982,7 +1017,16 @@
                 }
 
             } catch (error) {
-                showSettingsStatus(`❌ ${error.message}`, true);
+                // Show error in button
+                if (button) {
+                    const originalText = button.textContent;
+                    button.textContent = `❌ ${error.message}`;
+                    button.style.backgroundColor = '#dc2626'; // Red
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                        button.style.backgroundColor = '';
+                    }, 3000);
+                }
                 console.error(error);
             }
         }
@@ -990,7 +1034,9 @@
         function showRestartNotification() {
             // Hide status message
             const status = document.getElementById('settingsStatus');
-            status.classList.remove('show');
+            if (status) {
+                status.classList.remove('show');
+            }
 
             // Show restart notification
             document.getElementById('restartNotification').style.display = 'flex';
@@ -1131,14 +1177,11 @@ Transcript: {transcript}`;
             }
             status.textContent = msg;
             status.className = isError ? 'status error show' : 'status show';
-            setTimeout(() => status.classList.remove('show'), 5000);
+            setTimeout(() => status.classList.remove('show'), isError ? 5000 : 3000);
         }
 
         async function loadAITab() {
-            // Load OpenAI models
-            await loadOpenAIModels();
-
-            // Load settings to populate AI credentials
+            // Load settings (this will also load models and apply the saved selection)
             await loadSettings();
 
             // Load prompt
@@ -1159,8 +1202,8 @@ Transcript: {transcript}`;
             }
         }
 
-        async function savePrompt(event) {
-            const button = event ? event.target : null;
+        async function savePrompt(buttonElement) {
+            const button = buttonElement;
             const prompt = document.getElementById('promptEditor').value.trim();
 
             if (!prompt) {
@@ -1190,10 +1233,17 @@ Transcript: {transcript}`;
                     showButtonConfirmation(button, '✓ Saved!');
                 }
 
-                showAIStatus('✅ Prompt saved successfully', false);
-
             } catch (error) {
-                showAIStatus(`❌ ${error.message}`, true);
+                // Show error in button
+                if (button) {
+                    const originalText = button.textContent;
+                    button.textContent = `❌ ${error.message}`;
+                    button.style.backgroundColor = '#dc2626'; // Red
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                        button.style.backgroundColor = '';
+                    }, 3000);
+                }
                 console.error(error);
             }
         }
@@ -1205,8 +1255,8 @@ Transcript: {transcript}`;
             }
         }
 
-        async function saveAICredentials(event) {
-            const button = event ? event.target : null;
+        async function saveAICredentials(buttonElement) {
+            const button = buttonElement;
 
             try {
                 const settingsToSave = {};
@@ -1216,8 +1266,10 @@ Transcript: {transcript}`;
 
                 // Get API key if changed (don't save masked values)
                 const openaiKey = document.getElementById('OPENAI_API_KEY').value.trim();
+                const isNewApiKey = openaiKey && !openaiKey.includes('***');
+
                 // Don't save if it's the masked value or empty
-                if (openaiKey && !openaiKey.includes('***')) {
+                if (isNewApiKey) {
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
                 }
 
@@ -1232,26 +1284,33 @@ Transcript: {transcript}`;
                     throw new Error(error.detail?.message || 'Failed to save');
                 }
 
+                // If we saved a new API key, reload available models (preserve current selection)
+                if (isNewApiKey) {
+                    await loadOpenAIModels(true);
+                }
+
                 // Show confirmation in button
                 if (button) {
                     showButtonConfirmation(button, '✓ Saved!');
                 }
 
-                // Show success message in dedicated status box
-                const status = document.getElementById('aiSettingsStatus');
-                status.textContent = '✅ AI settings saved successfully';
-                status.className = 'status show';
-                setTimeout(() => status.classList.remove('show'), 3000);
-
                 // Hide unsaved indicator
-                document.getElementById('unsaved-ai-credentials').style.display = 'none';
+                const unsavedIndicator = document.getElementById('unsaved-ai-credentials');
+                if (unsavedIndicator) {
+                    unsavedIndicator.style.display = 'none';
+                }
 
             } catch (error) {
-                // Show error message in dedicated status box
-                const status = document.getElementById('aiSettingsStatus');
-                status.textContent = `❌ ${error.message}`;
-                status.className = 'status error show';
-                setTimeout(() => status.classList.remove('show'), 5000);
+                // Show error in button
+                if (button) {
+                    const originalText = button.textContent;
+                    button.textContent = `❌ ${error.message}`;
+                    button.style.backgroundColor = '#dc2626'; // Red
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                        button.style.backgroundColor = '';
+                    }, 3000);
+                }
                 console.error(error);
             }
         }
@@ -1279,8 +1338,8 @@ Transcript: {transcript}`;
 
         // Hide all unsaved indicators when settings are saved
         const originalSaveAllSettings = saveAllSettings;
-        saveAllSettings = async function() {
-            await originalSaveAllSettings();
+        saveAllSettings = async function(buttonElement) {
+            await originalSaveAllSettings(buttonElement);
             document.getElementById('unsaved-email').style.display = 'none';
             document.getElementById('unsaved-app').style.display = 'none';
             document.getElementById('unsaved-video').style.display = 'none';
