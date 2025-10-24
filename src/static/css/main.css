@@ -938,6 +938,35 @@
             gap: var(--space-1);
             flex-wrap: wrap;
         }
+        /* Third line: source info + Logs button */
+        .video-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 6px;
+        }
+
+        .video-source {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--grey-600);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .video-source-text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70vw;
+        }
+
+        .video-controls {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+        }
 
         .video-channel {
             color: var(--grey-700);
@@ -1072,6 +1101,25 @@
             border-color: var(--grey-900);
         }
 
+        /* Logs button (small grey variant) */
+        .btn-logs {
+            padding: 6px 12px;
+            background: var(--white);
+            color: var(--grey-700);
+            border: 1px solid var(--grey-300);
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-logs:hover {
+            background: var(--grey-100);
+            border-color: var(--grey-400);
+        }
+
         /* Status badges */
         .status-badge {
             padding: 6px 12px;
@@ -1088,7 +1136,7 @@
             background: var(--grey-50);
             color: var(--grey-600);
             border: 1px solid var(--grey-200);
-            cursor: pointer;
+            cursor: default;
         }
 
         .status-badge.processing {
@@ -1096,7 +1144,7 @@
             color: var(--grey-700);
             border: 1px solid var(--grey-300);
             animation: pulse 2s ease-in-out infinite;
-            cursor: pointer;
+            cursor: default;
         }
 
         @keyframes pulse {
@@ -1108,7 +1156,7 @@
             background: #ffe5e5;
             color: #d32f2f;
             border: 1px solid #ffcccc;
-            cursor: pointer;
+            cursor: default;
         }
 
         .status-badge[role="button"]:focus {
@@ -1116,17 +1164,7 @@
             outline-offset: 2px;
         }
 
-        /* Hover hint for pointer devices: append "View logs" affordance */
-        @media (hover: hover) {
-            .status-badge.processing:hover::after,
-            .status-badge.pending:hover::after,
-            .status-badge.error:hover::after {
-                content: '  View logs';
-                margin-left: 4px;
-                color: var(--black);
-                font-weight: 600;
-            }
-        }
+        /* No hover logs hint on status badges; Logs button handles it */
 
         .status-badge.warning {
             background: #fff3cd;

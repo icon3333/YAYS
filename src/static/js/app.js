@@ -575,11 +575,9 @@
                     div.id = `video-${video.id}`;
                     div.dataset.videoId = video.id;
 
-                    // Add source type badge for all videos
-                    // Shows whether video was added manually or automatically via channel
-                    const sourceBadge = video.source_type === 'via_manual'
-                        ? '<span class="meta-separator">•</span><span class="source-badge source-badge-manual">Manual</span>'
-                        : '<span class="meta-separator">•</span><span class="source-badge source-badge-channel">Channel</span>';
+                    // Build third line source tag and footer
+                    const isManual = video.source_type === 'via_manual';
+                    const sourceInfoText = isManual ? 'manual' : 'channel';
 
                     div.innerHTML = `
                         <div class="video-header">
@@ -591,12 +589,19 @@
                             </div>
                         </div>
                         <div class="video-meta">
+                            <span class="video-duration">${escapeHtml(video.duration_formatted)}</span>
+                            <span class="meta-separator">•</span>
                             <span class="video-channel">${escapeHtml(video.channel_name)}</span>
-                            ${sourceBadge}
                             <span class="meta-separator">•</span>
                             <span class="video-date">${escapeHtml(video.upload_date_formatted)}</span>
-                            <span class="meta-separator">•</span>
-                            <span class="video-duration">${escapeHtml(video.duration_formatted)}</span>
+                        </div>
+                        <div class="video-footer">
+                            <div class="video-source">
+                                <span class="video-source-text">${sourceInfoText}</span>
+                            </div>
+                            <div class="video-controls">
+                                <button class="btn-logs" aria-label="Open processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>
+                            </div>
                         </div>
                     `;
                     feedContainer.appendChild(div);
@@ -1500,9 +1505,9 @@ Transcript: {transcript}`;
 
                 return html;
             } else if (status === 'pending') {
-                return `<span class="status-badge pending" role="button" tabindex="0" aria-label="View processing logs" title="View processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">⏸️ Pending… (View logs)</span>`;
+                return `<span class="status-badge pending">⏸️ Pending…</span>`;
             } else if (status === 'processing') {
-                return `<span class="status-badge processing" role="button" tabindex="0" aria-label="View processing logs" title="View processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">⏳ Processing… (View logs)</span>`;
+                return `<span class="status-badge processing">⏳ Processing…</span>`;
             } else if (status && status.startsWith('failed_')) {
                 // Parse specific error type from status
                 let errorType = 'Failed';
@@ -1517,7 +1522,7 @@ Transcript: {transcript}`;
                 }
 
                 return `
-                    <span class="status-badge error" role="button" tabindex="0" aria-label="${escapeAttr(errorTitle)} (click for logs)" title="${escapeAttr(errorTitle)} (click for logs)" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">${errorType}</span>
+                    <span class="status-badge error" title="${escapeAttr(errorTitle)}">${errorType}</span>
                     <button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>
                 `;
             }

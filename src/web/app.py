@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
 from pydantic import BaseModel, field_validator
@@ -57,6 +58,16 @@ app = FastAPI(
     title="YAYS - Yet Another Youtube Summarizer",
     version="2.0.0",
     description="Modern minimalist design"
+)
+
+# Enable CORS to allow the UI to call the API from other origins during dev
+# Safe to allow all origins here since we don't use cookies/auth headers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount static files with custom StaticFiles class to disable caching
