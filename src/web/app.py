@@ -107,7 +107,13 @@ def scheduled_video_check():
 def start_scheduler():
     """Start the background scheduler when the app starts"""
     try:
-        interval_hours = int(os.getenv('CHECK_INTERVAL_HOURS', '6'))
+        # Read interval from database settings, fall back to schema default
+        env_settings = settings_manager.get_all_settings(mask_secrets=False)
+        check_interval_setting = env_settings.get('CHECK_INTERVAL_HOURS', {})
+
+        # Use value from database, or fall back to schema default (no hardcoded values)
+        interval_hours = int(check_interval_setting.get('value') or
+                           check_interval_setting.get('default', '4'))
 
         scheduler.add_job(
             scheduled_video_check,
@@ -183,7 +189,7 @@ async def get_channels():
 async def save_channels(data: ChannelUpdate):
     """API endpoint to save updated channel list"""
     try:
-        success = config_manager.write_config(data.channels, data.names)
+        success = config_manager.set_channels(data.channels, data.names)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to save config")
         logger.info(f"Saved {len(data.channels)} channels")
@@ -765,6 +771,109 @@ async def test_credentials(data: CredentialTest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/settings/send-test-email")
+async def send_test_email():
+    """
+    Send a test email to the configured TARGET_EMAIL address.
+    This tests SMTP connection, authentication, AND email delivery.
+
+    Returns:
+        dict: Success status and message
+    """
+    import smtplib
+    from datetime import datetime
+    from src.core.email_sender import EmailSender
+
+    try:
+        # Get email settings from database
+        all_settings = settings_manager.get_all_settings(mask_secrets=False)
+
+        target_email = all_settings.get('TARGET_EMAIL', {}).get('value')
+        smtp_user = all_settings.get('SMTP_USER', {}).get('value')
+        smtp_pass = all_settings.get('SMTP_PASS', {}).get('value')
+
+        # Validate required settings
+        if not target_email:
+            return {"success": False, "message": "❌ TARGET_EMAIL not configured"}
+        if not smtp_user:
+            return {"success": False, "message": "❌ SMTP_USER not configured"}
+        if not smtp_pass:
+            return {"success": False, "message": "❌ SMTP_PASS not configured"}
+
+        # Validate password length (should be 16 chars for Gmail app password)
+        if len(smtp_pass) != 16:
+            return {"success": False, "message": "❌ SMTP_PASS invalid (must be 16 characters)"}
+
+        # Create test email content
+        test_video = {
+            'title': 'YAYS Email Configuration Test',
+            'video_id': 'test',
+            'url': 'https://github.com/icon3333/YAYS',
+            'duration_string': 'Test',
+            'view_count': 0,
+            'upload_date': datetime.now().strftime('%Y-%m-%d')
+        }
+
+        test_summary = f"""YAYS - Email Target Test
+========================
+
+This is a test email from your YAYS (YouTube AI Summary) application.
+
+If you received this email, your email configuration is working correctly!
+
+Configuration Details:
+- Target Email: {target_email}
+- SMTP Server: smtp.gmail.com:587
+- SMTP User: {smtp_user}
+
+What's Next?
+- Your video summaries will be delivered to this email address
+- Make sure this email address is correct
+- Check your spam folder if you don't receive summaries
+
+---
+Sent by YAYS - YouTube AI Summary
+https://github.com/icon3333/YAYS"""
+
+        # Send test email using existing EmailSender
+        email_sender = EmailSender(smtp_user, smtp_pass, target_email)
+        success = email_sender.send_email(test_video, test_summary, "YAYS System")
+
+        if success:
+            logger.info(f"Test email sent successfully to {target_email}")
+            return {
+                "success": True,
+                "message": f"✅ Test email sent successfully to {target_email} - Check your inbox!"
+            }
+        else:
+            logger.error("Test email failed - EmailSender returned False")
+            return {
+                "success": False,
+                "message": "❌ Failed to send test email. Check logs for details."
+            }
+
+    except smtplib.SMTPAuthenticationError:
+        logger.error("Test email failed: SMTP authentication error")
+        return {
+            "success": False,
+            "message": "❌ Invalid email or password"
+        }
+
+    except smtplib.SMTPException as e:
+        logger.error(f"Test email failed: SMTP error - {str(e)}")
+        return {
+            "success": False,
+            "message": f"❌ SMTP error: {str(e)[:100]}"
+        }
+
+    except Exception as e:
+        logger.error(f"Test email failed: {str(e)}")
+        return {
+            "success": False,
+            "message": f"❌ Connection failed: {str(e)[:100]}"
+        }
+
+
 # ============================================================================
 # RESET API ENDPOINTS
 # ============================================================================
@@ -994,6 +1103,101 @@ async def get_video_details(video_id: str):
         raise
     except Exception as e:
         logger.error(f"Error getting video details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/videos/{video_id}/logs")
+async def get_video_logs(video_id: str, lines: int = 800, context: int = 3):
+    """
+    Return relevant log lines for a single video from summarizer logs.
+
+    Params:
+    - lines: max number of lines to scan from the end of the log (default 800)
+    - context: extra context lines before/after each match (default 3)
+    """
+    try:
+        # Validate video exists and get metadata for better matching
+        video = video_db.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        log_path = Path('logs') / 'summarizer.log'
+        if not log_path.exists():
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "video_id": video_id,
+                    "title": video.get('title'),
+                    "status": video.get('processing_status'),
+                    "lines": [],
+                    "message": "No summarizer.log found yet.",
+                }
+            )
+
+        # Read and scan last N lines for matches
+        with log_path.open('r', encoding='utf-8', errors='ignore') as f:
+            all_lines = f.readlines()
+
+        # Limit scanning to tail portion for performance
+        tail = all_lines[-max(0, lines):]
+
+        # Build match tokens: prefer video_id; also include a compact title token
+        tokens: List[str] = [video_id]
+        title = (video.get('title') or '').strip()
+        if title:
+            # Use first 25 characters to match truncated title logs like "▶️ <title>..."
+            tokens.append(title[:25])
+
+        match_indices: List[int] = []
+        lowered = [ln.lower() for ln in tail]
+        token_lowers = [t.lower() for t in tokens if t]
+
+        for i, ln in enumerate(lowered):
+            if any(tok in ln for tok in token_lowers):
+                match_indices.append(i)
+
+        # If no matches, return a gentle message
+        if not match_indices:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "video_id": video_id,
+                    "title": video.get('title'),
+                    "status": video.get('processing_status'),
+                    "lines": [],
+                    "message": "No matching log lines found for this video in the recent log tail.",
+                }
+            )
+
+        # Collect context windows and de-duplicate while preserving order
+        seen: set = set()
+        collected: List[str] = []
+        for idx in match_indices:
+            start = max(0, idx - max(0, context))
+            end = min(len(tail), idx + max(0, context) + 1)
+            for j in range(start, end):
+                # Use absolute position in tail to avoid duplicates
+                key = (j, tail[j])
+                if key in seen:
+                    continue
+                seen.add(key)
+                collected.append(tail[j].rstrip('\n'))
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "video_id": video_id,
+                "title": video.get('title'),
+                "status": video.get('processing_status'),
+                "lines": collected,
+                "message": None,
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading logs for {video_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

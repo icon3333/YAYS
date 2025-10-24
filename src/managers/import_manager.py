@@ -549,10 +549,26 @@ class ImportManager:
             if not isinstance(val, int) or val <= 0:
                 errors.append("settings.SUMMARY_LENGTH must be a positive integer")
 
+        # Helper function to validate boolean settings
+        def validate_boolean_setting(key: str, val: Any) -> None:
+            """Validate boolean setting - accepts bool or string representations."""
+            if isinstance(val, bool):
+                pass  # Valid
+            elif isinstance(val, str):
+                # Accept "true", "false", "1", "0" (case-insensitive)
+                if val.lower() not in ("true", "false", "1", "0"):
+                    errors.append(f"settings.{key} must be boolean or boolean string ('true', 'false', '1', '0')")
+            else:
+                errors.append(f"settings.{key} must be boolean")
+
         if "SKIP_SHORTS" in settings:
-            val = settings["SKIP_SHORTS"]
-            if not isinstance(val, bool):
-                errors.append("settings.SKIP_SHORTS must be boolean")
+            validate_boolean_setting("SKIP_SHORTS", settings["SKIP_SHORTS"])
+
+        if "USE_SUMMARY_LENGTH" in settings:
+            validate_boolean_setting("USE_SUMMARY_LENGTH", settings["USE_SUMMARY_LENGTH"])
+
+        if "SEND_EMAIL_SUMMARIES" in settings:
+            validate_boolean_setting("SEND_EMAIL_SUMMARIES", settings["SEND_EMAIL_SUMMARIES"])
 
         if "MAX_VIDEOS_PER_CHANNEL" in settings:
             val = settings["MAX_VIDEOS_PER_CHANNEL"]

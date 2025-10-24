@@ -99,6 +99,77 @@ class SettingsManager:
                 'required': False,
                 'default': 'gpt-4o-mini',
                 'description': 'OpenAI model to use for summaries'
+            },
+            # yt-dlp throttling and retry behaviour
+            'YTDLP_RATE_LIMIT': {
+                'type': 'text',
+                'required': False,
+                'default': '800K',
+                'description': 'Maximum yt-dlp download rate per connection (e.g., 800K, 1M)'
+            },
+            'YTDLP_SLEEP_INTERVAL': {
+                'type': 'integer',
+                'required': False,
+                'default': '60',
+                'min': 0,
+                'max': 3600,
+                'description': 'Minimum pause (seconds) between yt-dlp operations'
+            },
+            'YTDLP_MAX_SLEEP_INTERVAL': {
+                'type': 'integer',
+                'required': False,
+                'default': '180',
+                'min': 0,
+                'max': 7200,
+                'description': 'Maximum pause (seconds) between yt-dlp operations'
+            },
+            'YTDLP_SLEEP_REQUESTS': {
+                'type': 'integer',
+                'required': False,
+                'default': '3',
+                'min': 0,
+                'max': 120,
+                'description': 'Randomised pause ceiling (seconds) before individual yt-dlp HTTP requests'
+            },
+            'YTDLP_CONCURRENT_FRAGMENTS': {
+                'type': 'integer',
+                'required': False,
+                'default': '1',
+                'min': 1,
+                'max': 5,
+                'description': 'Maximum parallel fragment downloads for yt-dlp'
+            },
+            'YTDLP_RETRIES': {
+                'type': 'integer',
+                'required': False,
+                'default': '10',
+                'min': 1,
+                'max': 50,
+                'description': 'Total retry attempts for yt-dlp extraction failures'
+            },
+            'YTDLP_FRAGMENT_RETRIES': {
+                'type': 'integer',
+                'required': False,
+                'default': '15',
+                'min': 1,
+                'max': 100,
+                'description': 'Retry attempts for yt-dlp fragment downloads'
+            },
+            'YTDLP_RETRY_BASE_DELAY': {
+                'type': 'integer',
+                'required': False,
+                'default': '10',
+                'min': 1,
+                'max': 600,
+                'description': 'Base delay (seconds) for exponential backoff when rate limited'
+            },
+            'YTDLP_RETRY_MAX_DELAY': {
+                'type': 'integer',
+                'required': False,
+                'default': '120',
+                'min': 10,
+                'max': 3600,
+                'description': 'Maximum delay (seconds) for exponential backoff when rate limited'
             }
         }
 

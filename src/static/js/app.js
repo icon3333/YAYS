@@ -504,10 +504,18 @@
         // Video feed functions
         let feedRefreshInterval = null;
 
-        async function loadVideoFeed(reset = false) {
+        /**
+         * Load/render the video feed
+         * @param {boolean} reset - when true, resets offset and clears list
+         * @param {boolean} preserveScroll - when true, restores window scroll after render
+         */
+        async function loadVideoFeed(reset = false, preserveScroll = false) {
+            const savedScrollY = preserveScroll ? window.scrollY : null;
             if (reset) {
+                const feedEl = document.getElementById('videoFeed');
                 feedOffset = 0;
-                document.getElementById('videoFeed').innerHTML = '';
+                // Clear existing items
+                feedEl.innerHTML = '';
             }
 
             try {
@@ -551,9 +559,7 @@
                 // Start auto-refresh if videos are processing, stop otherwise
                 if (hasProcessingVideos && !feedRefreshInterval) {
                     console.log('Starting auto-refresh (videos processing)');
-                    feedRefreshInterval = setInterval(() => {
-                        loadVideoFeed(true);
-                    }, 5000); // Refresh every 5 seconds
+                    feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000); // Refresh every 5 seconds
                 } else if (!hasProcessingVideos && feedRefreshInterval) {
                     console.log('Stopping auto-refresh (no videos processing)');
                     clearInterval(feedRefreshInterval);
@@ -565,6 +571,9 @@
                 data.videos.forEach(video => {
                     const div = document.createElement('div');
                     div.className = 'video-item';
+                    // Tag node for targeted updates later
+                    div.id = `video-${video.id}`;
+                    div.dataset.videoId = video.id;
 
                     // Add source type badge for all videos
                     // Shows whether video was added manually or automatically via channel
@@ -577,7 +586,7 @@
                             <div class="video-title" onclick="openYouTube('${escapeAttr(video.id)}')">
                                 ${escapeHtml(video.title)}
                             </div>
-                            <div class="video-actions">
+                            <div class="video-actions" id="video-actions-${video.id}" data-status="${video.processing_status || ''}">
                                 ${renderVideoActions(video)}
                             </div>
                         </div>
@@ -602,6 +611,14 @@
                     document.getElementById('loadMoreBtn').style.display = 'none';
                 }
 
+                // Restore scroll after render if requested
+                if (savedScrollY !== null) {
+                    // Use RAF to ensure DOM is painted before adjusting scroll
+                    requestAnimationFrame(() => {
+                        window.scrollTo(0, savedScrollY);
+                    });
+                }
+
             } catch (error) {
                 console.error('Failed to load video feed:', error);
             }
@@ -614,6 +631,63 @@
 
         function filterFeed() {
             loadVideoFeed(true);
+        }
+
+        // Helper: is feed tab currently active/visible?
+        function isFeedTabActive() {
+            const el = document.getElementById('tab-feed');
+            return !!el && el.classList.contains('active');
+        }
+
+        // Auto-refresh tick that updates in-place without re-rendering the list
+        function autoRefreshFeedTick() {
+            // Only refresh if Feed tab is active
+            if (!isFeedTabActive()) return;
+
+            // Update only statuses of items that are pending/processing
+            updateProcessingStatuses();
+        }
+
+        // Find all action nodes that are still pending/processing
+        function getProcessingActionNodes() {
+            const selector = '#videoFeed .video-actions[data-status="pending"], #videoFeed .video-actions[data-status="processing"]';
+            return Array.from(document.querySelectorAll(selector));
+        }
+
+        // Pull fresh details for items in-flight and update their action area without touching layout
+        async function updateProcessingStatuses() {
+            const nodes = getProcessingActionNodes();
+            if (nodes.length === 0) {
+                // Nothing in-flight — stop polling
+                if (feedRefreshInterval) {
+                    clearInterval(feedRefreshInterval);
+                    feedRefreshInterval = null;
+                }
+                return;
+            }
+
+            // Fetch each item's latest state; in-flight counts are typically small
+            await Promise.all(nodes.map(async (actionsEl) => {
+                const videoEl = actionsEl.closest('.video-item');
+                if (!videoEl) return;
+                const videoId = videoEl.dataset.videoId;
+                try {
+                    const resp = await fetch(`/api/videos/${videoId}`);
+                    if (!resp.ok) return;
+                    const latest = await resp.json();
+                    const currentStatus = actionsEl.getAttribute('data-status') || '';
+                    const newStatus = latest.processing_status || '';
+
+                    if (newStatus !== currentStatus || newStatus === 'success') {
+                        // Update action UI
+                        actionsEl.innerHTML = renderVideoActions(latest);
+                        actionsEl.setAttribute('data-status', newStatus);
+                    }
+                } catch (e) {
+                    // Ignore transient errors
+                    console.debug('Status update failed for', videoId, e);
+                }
+            }));
         }
 
         function viewChannelFeed(channelId) {
@@ -777,6 +851,28 @@
             }
         }
 
+        // Toggle email fields based on SEND_EMAIL_SUMMARIES setting
+        function toggleEmailFields() {
+            const sendEmailSelect = document.getElementById('SEND_EMAIL_SUMMARIES');
+            const emailFields = document.querySelectorAll('.email-field');
+
+            if (sendEmailSelect && emailFields) {
+                const isEnabled = sendEmailSelect.value === 'true';
+
+                emailFields.forEach(field => {
+                    // Grey out the entire row
+                    field.style.opacity = isEnabled ? '1' : '0.5';
+                    field.style.pointerEvents = isEnabled ? 'auto' : 'none';
+
+                    // Disable all inputs and buttons within
+                    const inputs = field.querySelectorAll('input, button');
+                    inputs.forEach(input => {
+                        input.disabled = !isEnabled;
+                    });
+                });
+            }
+        }
+
         async function loadOpenAIModels(preserveSelection = false) {
             try {
                 const modelSelect = document.getElementById('OPENAI_MODEL');
@@ -913,6 +1009,9 @@
                 // Toggle summary length input visibility
                 toggleSummaryLengthInput();
 
+                // Toggle email fields based on SEND_EMAIL_SUMMARIES
+                toggleEmailFields();
+
             } catch (error) {
                 showSettingsStatus('Failed to load settings', true);
                 console.error(error);
@@ -957,24 +1056,12 @@
                 const smtpUser = document.getElementById('SMTP_USER').value.trim();
                 if (smtpUser) settingsToSave['SMTP_USER'] = smtpUser;
 
-                settingsToSave['LOG_LEVEL'] = document.getElementById('LOG_LEVEL').value;
-
                 const checkInterval = document.getElementById('CHECK_INTERVAL_HOURS').value.trim();
                 if (checkInterval) settingsToSave['CHECK_INTERVAL_HOURS'] = checkInterval;
 
-                const maxProcessed = document.getElementById('MAX_PROCESSED_ENTRIES').value.trim();
-                if (maxProcessed) settingsToSave['MAX_PROCESSED_ENTRIES'] = maxProcessed;
-
                 settingsToSave['SEND_EMAIL_SUMMARIES'] = document.getElementById('SEND_EMAIL_SUMMARIES').value;
-                settingsToSave['OPENAI_MODEL'] = document.getElementById('OPENAI_MODEL').value;
 
                 // Get password fields (only save if they have new values, not masked values)
-                const openaiKey = document.getElementById('OPENAI_API_KEY').value.trim();
-                // Don't save if it's the masked value or empty
-                if (openaiKey && !openaiKey.includes('***')) {
-                    settingsToSave['OPENAI_API_KEY'] = openaiKey;
-                }
-
                 const smtpPass = document.getElementById('SMTP_PASS').value.trim();
                 // Don't save if it's masked (dots) or empty
                 if (smtpPass && !smtpPass.includes('•')) {
@@ -982,10 +1069,6 @@
                 }
 
                 // Get config settings (only include non-empty values)
-                const summaryLength = document.getElementById('SUMMARY_LENGTH').value.trim();
-                if (summaryLength) settingsToSave['SUMMARY_LENGTH'] = summaryLength;
-
-                settingsToSave['USE_SUMMARY_LENGTH'] = document.getElementById('USE_SUMMARY_LENGTH').checked ? 'true' : 'false';
                 settingsToSave['SKIP_SHORTS'] = document.getElementById('SKIP_SHORTS').checked ? 'true' : 'false';
 
                 const maxVideos = document.getElementById('MAX_VIDEOS_PER_CHANNEL').value.trim();
@@ -1110,6 +1193,53 @@
 
             } catch (error) {
                 resultDiv.innerHTML = `<div class="test-result error">❌ Test failed: ${error.message}</div>`;
+            }
+        }
+
+        /**
+         * Send test email to TARGET_EMAIL address
+         * Tests end-to-end email delivery using configured settings
+         * REPLACES: testSmtpCredentials() - provides more comprehensive testing
+         */
+        async function sendTestEmail() {
+            const resultDiv = document.getElementById('smtp-test-result'); // Reuse existing div
+
+            // Show loading state
+            resultDiv.innerHTML = '<div class="test-result">Sending test email...</div>';
+
+            try {
+                const response = await fetch('/api/settings/send-test-email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    resultDiv.innerHTML = `<div class="test-result success">${result.message}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="test-result error">${result.message}</div>`;
+                }
+
+                // Auto-clear message after 10 seconds
+                setTimeout(() => {
+                    resultDiv.innerHTML = '';
+                }, 10000);
+
+            } catch (error) {
+                console.error('Test email error:', error);
+                resultDiv.innerHTML = `<div class="test-result error">❌ Failed to send test email: ${error.message}</div>`;
+
+                // Auto-clear error after 10 seconds
+                setTimeout(() => {
+                    resultDiv.innerHTML = '';
+                }, 10000);
             }
         }
 
@@ -1273,6 +1403,12 @@ Transcript: {transcript}`;
                     settingsToSave['OPENAI_API_KEY'] = openaiKey;
                 }
 
+                // Get summary length settings (now in AI tab)
+                const summaryLength = document.getElementById('SUMMARY_LENGTH').value.trim();
+                if (summaryLength) settingsToSave['SUMMARY_LENGTH'] = summaryLength;
+
+                settingsToSave['USE_SUMMARY_LENGTH'] = document.getElementById('USE_SUMMARY_LENGTH').checked ? 'true' : 'false';
+
                 const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1363,8 +1499,10 @@ Transcript: {transcript}`;
                 }
 
                 return html;
-            } else if (status === 'pending' || status === 'processing') {
-                return `<span class="status-badge processing">⏳ Processing...</span>`;
+            } else if (status === 'pending') {
+                return `<span class="status-badge pending" role="button" tabindex="0" aria-label="View processing logs" title="View processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">⏸️ Pending… (View logs)</span>`;
+            } else if (status === 'processing') {
+                return `<span class="status-badge processing" role="button" tabindex="0" aria-label="View processing logs" title="View processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">⏳ Processing… (View logs)</span>`;
             } else if (status && status.startsWith('failed_')) {
                 // Parse specific error type from status
                 let errorType = 'Failed';
@@ -1379,12 +1517,50 @@ Transcript: {transcript}`;
                 }
 
                 return `
-                    <span class="status-badge error" title="${escapeAttr(errorTitle)}">${errorType}</span>
+                    <span class="status-badge error" role="button" tabindex="0" aria-label="${escapeAttr(errorTitle)} (click for logs)" title="${escapeAttr(errorTitle)} (click for logs)" onclick="showVideoLogs('${escapeAttr(video.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showVideoLogs('${escapeAttr(video.id)}')}">${errorType}</span>
                     <button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>
                 `;
             }
 
             return '';
+        }
+
+        async function showVideoLogs(videoId) {
+            try {
+                const resp = await fetch(`/api/videos/${videoId}/logs?lines=1200&context=4`);
+                if (!resp.ok) throw new Error('Failed to load logs');
+                const data = await resp.json();
+
+                const title = data.title || videoId;
+                const status = data.status || '';
+                const lines = data.lines || [];
+                const message = data.message || '';
+
+                // Populate modal
+                const titleEl = document.getElementById('logsTitle');
+                const statusEl = document.getElementById('logsStatus');
+                const bodyEl = document.getElementById('logsBody');
+
+                if (titleEl) titleEl.textContent = `Logs: ${title}`;
+                if (statusEl) statusEl.textContent = status ? `Status: ${status}` : '';
+
+                if (lines.length > 0) {
+                    bodyEl.textContent = lines.join('\n');
+                } else {
+                    bodyEl.textContent = message || 'No relevant log lines found.';
+                }
+
+                document.getElementById('logsModal').classList.add('show');
+
+            } catch (e) {
+                showStatus('Failed to load logs', true);
+                console.error(e);
+            }
+        }
+
+        function closeLogsModal() {
+            const modal = document.getElementById('logsModal');
+            if (modal) modal.classList.remove('show');
         }
 
         async function showSummary(videoId) {
@@ -1428,10 +1604,13 @@ Transcript: {transcript}`;
                 });
 
                 if (response.ok) {
-                    showStatus('Video queued for reprocessing. Auto-refreshing...', false);
-                    // Reload feed immediately to show processing status
-                    // Auto-refresh will continue updating every 5 seconds
-                    setTimeout(() => loadVideoFeed(true), 1000);
+                    showStatus('Video queued for reprocessing. Updating...', false);
+                    // Prefer in-place status update for the retried video
+                    setTimeout(() => updateProcessingStatuses(), 800);
+                    // Ensure periodic updates run until processing completes
+                    if (!feedRefreshInterval) {
+                        feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
+                    }
                 } else {
                     throw new Error('Failed to retry');
                 }
@@ -1453,9 +1632,13 @@ Transcript: {transcript}`;
                 });
 
                 if (response.ok) {
-                    showStatus('Video check started! Auto-refreshing...', false);
-                    // Reload feed to show any new processing videos
-                    setTimeout(() => loadVideoFeed(true), 2000);
+                    showStatus('Video check started! Updating...', false);
+                    // Politely refresh to include any new processing videos without jumping
+                    setTimeout(() => loadVideoFeed(true, true), 2000);
+                    // Ensure periodic status updates start
+                    if (!feedRefreshInterval) {
+                        feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
+                    }
                 } else {
                     throw new Error('Failed to start check');
                 }
@@ -1522,8 +1705,13 @@ Transcript: {transcript}`;
 
                     // Reload feed to show the new video (it will be in "processing" state)
                     setTimeout(() => {
-                        loadVideoFeed(true);
+                        loadVideoFeed(true, true);
                     }, 1000);
+
+                    // Start periodic status updates if not already running
+                    if (!feedRefreshInterval) {
+                        feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
+                    }
 
                 } else {
                     // Error from backend
@@ -2182,4 +2370,3 @@ Transcript: {transcript}`;
                 closeMobileTOC();
             }
         });
-

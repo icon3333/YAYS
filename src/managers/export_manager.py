@@ -267,15 +267,30 @@ class ExportManager:
 
             # Get application settings (exclude credentials)
             env_settings = self.settings_manager.get_all_settings(mask_secrets=False)
+
+            # Settings that should be exported as boolean (env settings)
+            env_boolean_settings = {"SEND_EMAIL_SUMMARIES"}
+            # Settings that should be exported as integers (env settings)
+            env_integer_settings = {"CHECK_INTERVAL_HOURS", "MAX_PROCESSED_ENTRIES"}
+
             env_exported_count = 0
             for key, value in env_settings.items():
                 if key not in self.EXCLUDED_CREDENTIALS:
                     # Extract actual value from nested dict structure
                     # get_all_settings() returns {'key': {'value': 'actual_value', 'type': '...', ...}}
                     if isinstance(value, dict) and 'value' in value:
-                        settings[key] = value['value']
+                        extracted_value = value['value']
                     else:
-                        settings[key] = value  # Fallback for simple values
+                        extracted_value = value  # Fallback for simple values
+
+                    # Convert boolean settings to actual boolean
+                    if key in env_boolean_settings and isinstance(extracted_value, str):
+                        extracted_value = extracted_value.lower() in ("true", "1")
+                    # Convert integer settings to actual integers
+                    elif key in env_integer_settings and isinstance(extracted_value, str) and extracted_value.isdigit():
+                        extracted_value = int(extracted_value)
+
+                    settings[key] = extracted_value
                     env_exported_count += 1
                 else:
                     logger.debug(f"Skipping credential: {key}")
@@ -290,11 +305,20 @@ class ExportManager:
                 "MAX_FEED_ENTRIES",
             ]
 
+            # Settings that should be exported as boolean
+            boolean_settings = {"USE_SUMMARY_LENGTH", "SKIP_SHORTS"}
+
             for key in config_keys:
                 value = all_settings.get(key)
                 if value is not None:
-                    # Convert string booleans to actual booleans
-                    if isinstance(value, str) and value.lower() in ("true", "false"):
+                    # Convert boolean settings first (before int conversion)
+                    if key in boolean_settings:
+                        if isinstance(value, str):
+                            # Accept "true", "false", "1", "0"
+                            value = value.lower() in ("true", "1")
+                        # If already boolean, keep it
+                    # Convert string booleans to actual booleans (for non-boolean settings)
+                    elif isinstance(value, str) and value.lower() in ("true", "false"):
                         value = value.lower() == "true"
                     # Convert string integers to actual integers
                     elif isinstance(value, str) and value.isdigit():

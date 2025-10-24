@@ -597,6 +597,36 @@ class VideoDatabase:
                 WHERE id = ?
             """, (video_id,))
 
+    def get_pending_videos(self) -> List[Dict]:
+        """
+        Get all videos with pending status for processing
+
+        Returns:
+            List of video dictionaries with basic metadata
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, channel_id, channel_name, title, duration_seconds, view_count, upload_date
+                FROM videos
+                WHERE processing_status = 'pending'
+                ORDER BY created_at ASC
+            """)
+
+            videos = []
+            for row in cursor.fetchall():
+                videos.append({
+                    'id': row['id'],
+                    'channel_id': row['channel_id'],
+                    'channel_name': row['channel_name'],
+                    'title': row['title'],
+                    'duration_seconds': row['duration_seconds'],
+                    'view_count': row['view_count'],
+                    'upload_date': row['upload_date'],
+                })
+
+            return videos
+
     def reset_all_data(self):
         """
         Delete all videos from the database

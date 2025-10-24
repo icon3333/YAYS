@@ -217,7 +217,6 @@ class VideoProcessor:
                 status=STATUS_FAILED_TRANSCRIPT,
                 error_message='Transcript not available for this video'
             )
-            self.processed.mark_processed(video['id'])
             self.stats['videos_skipped'] += 1
             return False
 
@@ -244,7 +243,6 @@ class VideoProcessor:
                 status=STATUS_FAILED_AI,
                 error_message='Failed to generate summary using OpenAI API'
             )
-            self.processed.mark_processed(video['id'])
             self.stats['videos_failed'] += 1
             self.stats['api_errors'] += 1
             return False
@@ -302,7 +300,17 @@ class VideoProcessor:
         max_videos = int(self.config_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))
         skip_shorts = self.config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
-        # Process each channel
+        # STEP 1: Process any pending videos from database (retries, manual adds, etc.)
+        pending_videos = self.db.get_pending_videos()
+        if pending_videos:
+            self.logger.info(f"🔄 Processing {len(pending_videos)} pending videos from database")
+            for video in pending_videos:
+                channel_id = video.get('channel_id', 'unknown')
+                channel_name = video.get('channel_name', 'Unknown')
+                self.logger.info(f"   ▶️  {video['title'][:50]}...")
+                self.process_video(video, channel_id, channel_name)
+
+        # STEP 2: Process each channel for new videos
         for channel_id in self.channels:
             channel_name = self.channel_names.get(channel_id, channel_id)
             self.logger.info(f"📡 Checking: {channel_name}")

@@ -72,9 +72,20 @@ class AISummarizer:
                 # Build API call parameters
                 api_params = {
                     "model": self.model,
-                    "temperature": 0.3,
                     "messages": [{"role": "user", "content": prompt}]
                 }
+
+                # Only add temperature for models that support it
+                # o1/o3/reasoning models and some preview models don't support temperature
+                model_lower = self.model.lower()
+                supports_temperature = not (
+                    model_lower.startswith('o1') or
+                    model_lower.startswith('o3') or
+                    'gpt-5' in model_lower
+                )
+
+                if supports_temperature:
+                    api_params["temperature"] = 0.3
 
                 # Only add max_tokens if it's set
                 if max_tokens is not None:
