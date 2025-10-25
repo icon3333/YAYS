@@ -7,9 +7,10 @@ Main entry point for video summarization
 import os
 import sys
 import logging
-from datetime import datetime
-from time import sleep
-from typing import Dict
+from datetime import datetime, timedelta
+from time import sleep, time
+from typing import Dict, List
+from pathlib import Path
 
 # Import core modules
 from src.core.youtube import YouTubeClient
@@ -33,17 +34,21 @@ from src.utils.validators import is_valid_email
 
 # Configure structured logging
 def setup_logging():
-    """Setup logging with rotation and formatting"""
+    """Setup logging with rotation and formatting.
+
+    - Console: only messages from the 'summarizer' logger
+    - File: capture ALL module logs to help diagnose transcript issues
+    """
     log_dir = 'logs'
     os.makedirs(log_dir, exist_ok=True)
 
     log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 
-    # Create logger
+    # Create our app logger
     logger = logging.getLogger('summarizer')
     logger.setLevel(getattr(logging, log_level, logging.INFO))
 
-    # Console handler
+    # Console handler (only for summarizer logger)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_format = logging.Formatter(
@@ -51,8 +56,9 @@ def setup_logging():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     console_handler.setFormatter(console_format)
+    logger.addHandler(console_handler)
 
-    # File handler with rotation
+    # File handler with rotation on ROOT to capture all module logs
     from logging.handlers import RotatingFileHandler
     file_handler = RotatingFileHandler(
         os.path.join(log_dir, 'summarizer.log'),
@@ -67,9 +73,9 @@ def setup_logging():
     )
     file_handler.setFormatter(file_format)
 
-    # Add handlers
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
 
     return logger
 
@@ -129,7 +135,19 @@ class VideoProcessor:
         use_ytdlp = True  # Always use ytdlp
 
         self.youtube_client = YouTubeClient(use_ytdlp=use_ytdlp)
-        self.transcript_extractor = TranscriptExtractor()
+
+        # Configure transcript extractor based on provider setting
+        transcript_provider = all_settings.get('TRANSCRIPT_PROVIDER', {}).get('value', 'legacy')
+        supadata_api_key = all_settings.get('SUPADATA_API_KEY', {}).get('value', '')
+
+        # Log the provider being used
+        self.logger.info(f"Using transcript provider: {transcript_provider}")
+
+        self.transcript_extractor = TranscriptExtractor(
+            provider=transcript_provider,
+            supadata_api_key=supadata_api_key if transcript_provider == 'supadata' else None,
+            cache=self.db
+        )
 
         # Get model from database or use default
         openai_model = all_settings.get('OPENAI_MODEL', {}).get('value', 'gpt-4o-mini')
@@ -144,6 +162,11 @@ class VideoProcessor:
 
         self.logger.info("Database initialized")
 
+        # Initialize lock file for process heartbeat
+        self.lock_file = Path('data/.processing.lock')
+        self.last_heartbeat = time()
+        self._update_heartbeat()
+
         # Statistics
         self.stats = {
             'videos_processed': 0,
@@ -157,12 +180,123 @@ class VideoProcessor:
 
         self.logger.info("Initialization complete")
 
+    def _update_heartbeat(self):
+        """Update process heartbeat lock file with current timestamp"""
+        try:
+            self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+            self.lock_file.write_text(str(time()))
+            self.last_heartbeat = time()
+        except Exception as e:
+            self.logger.warning(f"Failed to update heartbeat: {e}")
+
+    def _is_processor_alive(self, threshold_seconds: int = 120) -> bool:
+        """Check if another processor is actively running"""
+        try:
+            if not self.lock_file.exists():
+                return False
+
+            last_update = float(self.lock_file.read_text())
+            age = time() - last_update
+            return age < threshold_seconds
+        except Exception:
+            return False
+
+    def cleanup_stuck_videos(self):
+        """
+        Smart detection and cleanup of stuck videos using hybrid approach:
+        1. Quick check: 2+ minutes without heartbeat
+        2. Medium check: 5+ minutes in processing
+        3. Absolute timeout: 10+ minutes regardless
+        """
+        try:
+            # Get all videos currently in processing state
+            with self.db._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, title, processed_date, retry_count
+                    FROM videos
+                    WHERE processing_status = 'processing'
+                """)
+                processing_videos = cursor.fetchall()
+
+            if not processing_videos:
+                return
+
+            stuck_videos = []
+            now = datetime.now()
+            processor_alive = self._is_processor_alive()
+
+            for row in processing_videos:
+                video_id = row['id']
+                title = row['title'][:50]
+                processed_date = row['processed_date']
+                retry_count = row['retry_count'] or 0
+
+                if not processed_date:
+                    continue
+
+                # Calculate time in processing
+                process_time = now - datetime.fromisoformat(processed_date)
+                minutes_processing = process_time.total_seconds() / 60
+
+                # Tier 1: Quick check (2+ minutes and no active processor)
+                if minutes_processing > 2 and not processor_alive:
+                    self.logger.warning(f"Stuck (no heartbeat): {title} ({minutes_processing:.1f} min)")
+                    stuck_videos.append((video_id, retry_count))
+                    continue
+
+                # Tier 2: Medium check (5+ minutes regardless of heartbeat)
+                if minutes_processing > 5:
+                    self.logger.warning(f"Stuck (timeout): {title} ({minutes_processing:.1f} min)")
+                    stuck_videos.append((video_id, retry_count))
+                    continue
+
+                # Tier 3: Absolute timeout (10+ minutes failsafe)
+                if minutes_processing > 10:
+                    self.logger.warning(f"Stuck (absolute): {title} ({minutes_processing:.1f} min)")
+                    stuck_videos.append((video_id, retry_count))
+
+            # Reset stuck videos
+            if stuck_videos:
+                with self.db._get_connection() as conn:
+                    cursor = conn.cursor()
+                    for video_id, retry_count in stuck_videos:
+                        # Check retry limit
+                        if retry_count >= 3:
+                            # Mark as permanently failed after 3 attempts
+                            cursor.execute("""
+                                UPDATE videos
+                                SET processing_status = 'failed_permanent',
+                                    error_message = 'Max retries exceeded (3 attempts)'
+                                WHERE id = ?
+                            """, (video_id,))
+                            self.logger.info(f"Marked as permanent failure: {video_id}")
+                        else:
+                            # Reset to pending for retry
+                            cursor.execute("""
+                                UPDATE videos
+                                SET processing_status = 'pending',
+                                    error_message = 'Reset from stuck processing state'
+                                WHERE id = ?
+                            """, (video_id,))
+                            self.logger.info(f"Reset to pending: {video_id}")
+
+                    conn.commit()
+
+                self.logger.info(f"✅ Cleaned up {len(stuck_videos)} stuck videos")
+
+        except Exception as e:
+            self.logger.error(f"Error cleaning stuck videos: {e}")
+
     def process_video(self, video: Dict, channel_id: str, channel_name: str) -> bool:
         """
         Process a single video: extract transcript, summarize, save to DB, and optionally email
         Returns True if successful (summary generated and saved)
         """
         self.logger.info(f"   ▶️  {video['title'][:60]}...")
+
+        # Update heartbeat to show we're actively processing
+        self._update_heartbeat()
 
         # Get enhanced metadata (if using yt-dlp)
         metadata = self.youtube_client.get_video_metadata(video['id'])
@@ -189,13 +323,28 @@ class VideoProcessor:
         # Check if video already exists in database
         if self.db.is_processed(video['id']):
             existing = self.db.get_video_by_id(video['id'])
-            if existing and existing.get('processing_status') != STATUS_PENDING:
-                self.logger.debug(f"      Already processed: {existing.get('processing_status')}")
+
+            # Check retry limit (max 3 attempts)
+            retry_count = existing.get('retry_count', 0)
+            if retry_count >= 3 and existing.get('processing_status') != STATUS_SUCCESS:
+                self.logger.info(f"      Skipping after {retry_count} failed attempts")
                 return False
 
-        # Mark as processing
+            # Skip if already successfully processed
+            if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
+                if existing.get('processing_status') != 'failed_permanent':
+                    self.logger.debug(f"      Already processed: {existing.get('processing_status')}")
+                return False
+
+        # Mark as processing and increment retry count
         if self.db.is_processed(video['id']):
-            self.db.update_video_processing(video['id'], STATUS_PROCESSING)
+            existing = self.db.get_video_by_id(video['id'])
+            current_retry = existing.get('retry_count', 0)
+            self.db.update_video_processing(
+                video['id'],
+                STATUS_PROCESSING,
+                retry_count=current_retry + 1
+            )
         else:
             self.db.add_video(
                 video_id=video['id'],
@@ -209,6 +358,8 @@ class VideoProcessor:
             )
 
         # STEP 1: Extract transcript
+        self.logger.debug(f"      Fetching transcript for {video['id']}")
+        self._update_heartbeat()  # Keep heartbeat alive
         transcript, duration = self.transcript_extractor.get_transcript(video['id'])
         if not transcript:
             self.logger.info(f"      ❌ No transcript available")
@@ -222,12 +373,13 @@ class VideoProcessor:
 
         # Use metadata duration if available, otherwise use transcript duration
         if not video.get('duration_string') or video['duration_string'] == 'Unknown':
-            video['duration_string'] = duration
+            video['duration_string'] = duration or 'Unknown'
 
         # STEP 2: Generate AI summary
         use_summary_length = self.config_settings.get('USE_SUMMARY_LENGTH', 'false') == 'true'
         max_tokens = int(self.config_settings.get('SUMMARY_LENGTH', '500')) if use_summary_length else None
         prompt_template = self.config_manager.get_prompt()
+        self._update_heartbeat()  # Keep heartbeat alive
         summary = self.summarizer.summarize_with_retry(
             video=video,
             transcript=transcript,
@@ -290,6 +442,10 @@ class VideoProcessor:
         self.logger.info("="*60)
         self.logger.info(f"Starting processing run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info("="*60)
+
+        # Clean up any stuck videos from previous runs
+        self.logger.info("🔍 Checking for stuck videos...")
+        self.cleanup_stuck_videos()
 
         if not self.channels:
             self.logger.warning("No channels configured!")

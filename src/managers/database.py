@@ -139,6 +139,7 @@ class VideoDatabase:
         self._migrate_add_source_type()
         self._ensure_settings_table()
         self._ensure_channels_table()
+        self._ensure_transcript_cache_table()
 
     def _migrate_add_source_type(self):
         """
@@ -270,6 +271,27 @@ class VideoDatabase:
                     ('MAX_VIDEOS_PER_CHANNEL', '5', 'integer', 0, 'Maximum videos to check per channel'),
                     ('CHECK_INTERVAL_MINUTES', '60', 'integer', 0, 'How often to check for new videos (minutes)'),
                     ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process')
+            """)
+
+            conn.commit()
+
+    def _ensure_transcript_cache_table(self):
+        """Ensure transcript_cache table exists for transcript availability caching."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transcript_cache (
+                    video_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_transcript_cache_status
+                ON transcript_cache(status)
             """)
 
             conn.commit()
@@ -406,6 +428,7 @@ class VideoDatabase:
     def get_processed_videos(
         self,
         channel_id: Optional[str] = None,
+        source_type: Optional[str] = None,
         limit: int = 25,
         offset: int = 0,
         order_by: str = 'recent'  # 'recent', 'oldest', 'channel'
@@ -435,11 +458,21 @@ class VideoDatabase:
             """
 
             params = []
+            where_clauses = []
 
             # Filter by channel if specified
             if channel_id:
-                query += " WHERE channel_id = ?"
+                where_clauses.append("channel_id = ?")
                 params.append(channel_id)
+
+            # Filter by source_type if specified
+            if source_type:
+                where_clauses.append("source_type = ?")
+                params.append(source_type)
+
+            # Add WHERE clause if filters exist
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
 
             # Order by
             if order_by == 'recent':
@@ -464,15 +497,27 @@ class VideoDatabase:
 
             return videos
 
-    def get_total_count(self, channel_id: Optional[str] = None) -> int:
+    def get_total_count(self, channel_id: Optional[str] = None, source_type: Optional[str] = None) -> int:
         """Get total count of processed videos (for pagination)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            query = "SELECT COUNT(*) as count FROM videos"
+            params = []
+            where_clauses = []
+
             if channel_id:
-                cursor.execute("SELECT COUNT(*) as count FROM videos WHERE channel_id = ?", (channel_id,))
-            else:
-                cursor.execute("SELECT COUNT(*) as count FROM videos")
+                where_clauses.append("channel_id = ?")
+                params.append(channel_id)
+
+            if source_type:
+                where_clauses.append("source_type = ?")
+                params.append(source_type)
+
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+
+            cursor.execute(query, tuple(params))
 
             row = cursor.fetchone()
             return row['count'] if row else 0
@@ -535,7 +580,8 @@ class VideoDatabase:
         summary_text: Optional[str] = None,
         error_message: Optional[str] = None,
         email_sent: Optional[bool] = None,
-        summary_length: Optional[int] = None
+        summary_length: Optional[int] = None,
+        retry_count: Optional[int] = None
     ):
         """
         Update video processing status and summary
@@ -564,6 +610,10 @@ class VideoDatabase:
                 updates.append('email_sent = ?')
                 params.append(int(email_sent))
 
+            if retry_count is not None:
+                updates.append('retry_count = ?')
+                params.append(retry_count)
+
             params.append(video_id)
 
             cursor.execute(f"""
@@ -585,6 +635,55 @@ class VideoDatabase:
                 return None
 
             return self._video_row_to_dict(row, include_summary=True)
+
+    def get_transcript_cache(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached transcript status for a video if available."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT video_id, status, reason, last_checked
+                FROM transcript_cache
+                WHERE video_id = ?
+                """,
+                (video_id,),
+            )
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            return {
+                'video_id': row['video_id'],
+                'status': row['status'],
+                'reason': row['reason'],
+                'last_checked': row['last_checked'],
+            }
+
+    def set_transcript_cache(self, video_id: str, status: str, reason: Optional[str] = None) -> None:
+        """Persist transcript availability status for a video."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO transcript_cache (video_id, status, reason, last_checked)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    status = excluded.status,
+                    reason = excluded.reason,
+                    last_checked = CURRENT_TIMESTAMP
+                """,
+                (video_id, status, reason),
+            )
+
+    def clear_transcript_cache(self, video_id: str) -> None:
+        """Remove cached transcript status for a video."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM transcript_cache WHERE video_id = ?",
+                (video_id,),
+            )
 
     def reset_video_status(self, video_id: str):
         """Reset video processing status to pending for retry"""

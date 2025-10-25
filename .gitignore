@@ -76,3 +76,4 @@ test_*
 
 # Claude Code settings (contains user permissions/preferences)
 .claude/
+.llm_process

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube Channel and Video Operations
-Handles yt-dlp data extraction with RSS fallback
+Handles discovery via yt-dlp with RSS fallback (transcripts handled separately)
 """
 
 import re
@@ -29,7 +29,7 @@ class YouTubeClient:
 
         if self.use_ytdlp:
             self.ytdlp = YTDLPClient()
-            logger.info("YouTubeClient initialized with yt-dlp")
+            logger.info("YouTubeClient initialized with yt-dlp discovery support")
         else:
             if use_ytdlp and not YTDLP_AVAILABLE:
                 logger.warning("yt-dlp requested but not available, falling back to RSS")

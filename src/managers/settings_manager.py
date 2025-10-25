@@ -50,6 +50,13 @@ class SettingsManager:
                 'max_length': 16,
                 'description': 'Gmail app password (16 chars)'
             },
+            'SUPADATA_API_KEY': {
+                'type': 'secret',
+                'required': False,
+                'pattern': r'^sk_[A-Za-z0-9_-]+$',
+                'description': 'Supadata.ai API Key for transcript service',
+                'default': ''
+            },
             # Non-secrets (plaintext in database)
             'TARGET_EMAIL': {
                 'type': 'email',
@@ -99,6 +106,13 @@ class SettingsManager:
                 'required': False,
                 'default': 'gpt-4o-mini',
                 'description': 'OpenAI model to use for summaries'
+            },
+            'TRANSCRIPT_PROVIDER': {
+                'type': 'enum',
+                'required': False,
+                'default': 'legacy',
+                'options': ['legacy', 'supadata'],
+                'description': 'Transcript provider (legacy or supadata)'
             },
             # yt-dlp throttling and retry behaviour
             'YTDLP_RATE_LIMIT': {

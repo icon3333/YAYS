@@ -528,7 +528,9 @@
                     order_by: sortOrder
                 });
 
-                if (channelFilter) {
+                if (channelFilter === 'manual') {
+                    params.append('source_type', 'via_manual');
+                } else if (channelFilter) {
                     params.append('channel_id', channelFilter);
                 }
 
@@ -580,27 +582,22 @@
                     const sourceInfoText = isManual ? 'manual' : 'channel';
 
                     div.innerHTML = `
-                        <div class="video-header">
+                        <div class="video-grid" id="video-actions-${video.id}" data-status="${video.processing_status || ''}">
                             <div class="video-title" onclick="openYouTube('${escapeAttr(video.id)}')">
                                 ${escapeHtml(video.title)}
                             </div>
-                            <div class="video-actions" id="video-actions-${video.id}" data-status="${video.processing_status || ''}">
-                                ${renderVideoActions(video)}
+                            ${renderVideoActions(video)}
+                            <div class="video-meta">
+                                <span class="video-duration">${escapeHtml(video.duration_formatted)}</span>
+                                <span class="meta-separator">•</span>
+                                <span class="video-channel">${escapeHtml(video.channel_name)}</span>
+                                <span class="meta-separator">•</span>
+                                <span class="video-date">${escapeHtml(video.upload_date_formatted)}</span>
                             </div>
-                        </div>
-                        <div class="video-meta">
-                            <span class="video-duration">${escapeHtml(video.duration_formatted)}</span>
-                            <span class="meta-separator">•</span>
-                            <span class="video-channel">${escapeHtml(video.channel_name)}</span>
-                            <span class="meta-separator">•</span>
-                            <span class="video-date">${escapeHtml(video.upload_date_formatted)}</span>
                         </div>
                         <div class="video-footer">
                             <div class="video-source">
                                 <span class="video-source-text">${sourceInfoText}</span>
-                            </div>
-                            <div class="video-controls">
-                                <button class="btn-logs" aria-label="Open processing logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>
                             </div>
                         </div>
                     `;
@@ -655,7 +652,7 @@
 
         // Find all action nodes that are still pending/processing
         function getProcessingActionNodes() {
-            const selector = '#videoFeed .video-actions[data-status="pending"], #videoFeed .video-actions[data-status="processing"]';
+            const selector = '#videoFeed .video-grid[data-status="pending"], #videoFeed .video-grid[data-status="processing"]';
             return Array.from(document.querySelectorAll(selector));
         }
 
@@ -672,21 +669,29 @@
             }
 
             // Fetch each item's latest state; in-flight counts are typically small
-            await Promise.all(nodes.map(async (actionsEl) => {
-                const videoEl = actionsEl.closest('.video-item');
+            await Promise.all(nodes.map(async (gridEl) => {
+                const videoEl = gridEl.closest('.video-item');
                 if (!videoEl) return;
                 const videoId = videoEl.dataset.videoId;
                 try {
                     const resp = await fetch(`/api/videos/${videoId}`);
                     if (!resp.ok) return;
                     const latest = await resp.json();
-                    const currentStatus = actionsEl.getAttribute('data-status') || '';
+                    const currentStatus = gridEl.getAttribute('data-status') || '';
                     const newStatus = latest.processing_status || '';
 
                     if (newStatus !== currentStatus || newStatus === 'success') {
-                        // Update action UI
-                        actionsEl.innerHTML = renderVideoActions(latest);
-                        actionsEl.setAttribute('data-status', newStatus);
+                        // Update labels and buttons (remove old ones, add new ones)
+                        const oldLabels = gridEl.querySelector('.video-labels');
+                        const oldButtons = gridEl.querySelector('.video-buttons');
+                        if (oldLabels) oldLabels.remove();
+                        if (oldButtons) oldButtons.remove();
+
+                        // Insert new labels and buttons after title
+                        const title = gridEl.querySelector('.video-title');
+                        title.insertAdjacentHTML('afterend', renderVideoActions(latest));
+
+                        gridEl.setAttribute('data-status', newStatus);
                     }
                 } catch (e) {
                     // Ignore transient errors
@@ -709,8 +714,14 @@
         function populateChannelFilter() {
             const select = document.getElementById('feedChannelFilter');
 
-            // Keep "All Channels" option
-            select.innerHTML = '<option value="">All Channels</option>';
+            // Keep "All Sources" option
+            select.innerHTML = '<option value="">All Sources</option>';
+
+            // Add Manual option
+            const manualOption = document.createElement('option');
+            manualOption.value = 'manual';
+            manualOption.textContent = 'Manual';
+            select.appendChild(manualOption);
 
             // Add each channel
             channels.forEach(id => {
@@ -793,6 +804,15 @@
         // Load on start
         loadChannels();
 
+        // Restore the last active tab from localStorage
+        const savedTab = localStorage.getItem('activeTab');
+        if (savedTab && ['channels', 'feed', 'settings', 'ai'].includes(savedTab)) {
+            // Small delay to ensure the page is fully loaded
+            setTimeout(() => {
+                showTab(savedTab);
+            }, 100);
+        }
+
         // ============================================================================
         // TAB NAVIGATION
         // ============================================================================
@@ -823,6 +843,9 @@
                     }
                 });
             }
+
+            // Save the current tab to localStorage
+            localStorage.setItem('activeTab', tabName);
 
             // Load data for the tab
             if (tabName === 'feed') {
@@ -875,6 +898,27 @@
                         input.disabled = !isEnabled;
                     });
                 });
+            }
+        }
+
+        /**
+         * Toggle visibility of Supadata API key field based on selected provider
+         */
+        function toggleSupadataFields() {
+            const providerSelect = document.getElementById('TRANSCRIPT_PROVIDER');
+            const supadataApiRow = document.getElementById('supadata-api-row');
+
+            if (providerSelect && supadataApiRow) {
+                const isSupadata = providerSelect.value === 'supadata';
+                supadataApiRow.style.display = isSupadata ? 'block' : 'none';
+
+                // If switching to supadata and no API key is set, mark as unsaved
+                if (isSupadata) {
+                    const apiKeyField = document.getElementById('SUPADATA_API_KEY');
+                    if (apiKeyField && !apiKeyField.value) {
+                        markSectionUnsaved('transcript');
+                    }
+                }
             }
         }
 
@@ -971,7 +1015,7 @@
                 for (const [key, info] of Object.entries(data.env)) {
                     const element = document.getElementById(key);
 
-                    if (key === 'OPENAI_API_KEY' || key === 'SMTP_PASS') {
+                    if (key === 'OPENAI_API_KEY' || key === 'SMTP_PASS' || key === 'SUPADATA_API_KEY') {
                         // For password fields, show masked value in the field and placeholder
                         if (element) {
                             if (info.masked && info.masked !== '') {
@@ -979,7 +1023,10 @@
                                 element.value = info.masked;
                                 element.placeholder = 'Enter new key to update';
                             } else {
-                                element.placeholder = (key === 'OPENAI_API_KEY' ? 'sk-...' : '16-character app password');
+                                let placeholder = '16-character app password';
+                                if (key === 'OPENAI_API_KEY') placeholder = 'sk-...';
+                                else if (key === 'SUPADATA_API_KEY') placeholder = 'sk_...';
+                                element.placeholder = placeholder;
                             }
                         }
                     } else if (key === 'OPENAI_MODEL') {
@@ -1016,6 +1063,9 @@
 
                 // Toggle email fields based on SEND_EMAIL_SUMMARIES
                 toggleEmailFields();
+
+                // Toggle Supadata API key field based on provider
+                toggleSupadataFields();
 
             } catch (error) {
                 showSettingsStatus('Failed to load settings', true);
@@ -1414,6 +1464,18 @@ Transcript: {transcript}`;
 
                 settingsToSave['USE_SUMMARY_LENGTH'] = document.getElementById('USE_SUMMARY_LENGTH').checked ? 'true' : 'false';
 
+                // Get transcript provider settings
+                settingsToSave['TRANSCRIPT_PROVIDER'] = document.getElementById('TRANSCRIPT_PROVIDER').value;
+
+                // Get Supadata API key if changed (don't save masked values)
+                const supadataKey = document.getElementById('SUPADATA_API_KEY').value.trim();
+                const isNewSupadataKey = supadataKey && !supadataKey.includes('***') && !supadataKey.includes('•');
+
+                // Only save if it's a new key (not masked or empty)
+                if (isNewSupadataKey) {
+                    settingsToSave['SUPADATA_API_KEY'] = supadataKey;
+                }
+
                 const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1492,22 +1554,54 @@ Transcript: {transcript}`;
 
         function renderVideoActions(video) {
             const status = video.processing_status;
+            const retryCount = video.retry_count || 0;
+            let labelsHtml = '<div class="video-labels">';
+            let buttonsHtml = '<div class="video-buttons">';
 
             if (status === 'success') {
-                // Show Read Summary button + email status badge
-                let html = `<button class="btn-read-summary" onclick="showSummary('${escapeAttr(video.id)}')">Read Summary</button>`;
-
+                // Labels row
                 if (video.email_sent) {
-                    html += `<span class="status-badge success" title="Email sent">Email</span>`;
+                    labelsHtml += `<span class="label-status label-email-sent" title="Email sent">Email</span>`;
                 } else {
-                    html += `<span class="status-badge warning" title="Email pending">Email Pending</span>`;
+                    labelsHtml += `<span class="label-status label-email-pending" title="Email pending">Email</span>`;
                 }
 
-                return html;
+                // Buttons row
+                buttonsHtml += `<button class="btn-read-summary" onclick="showSummary('${escapeAttr(video.id)}')">Read Summary</button>`;
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
+
             } else if (status === 'pending') {
-                return `<span class="status-badge pending">⏸️ Pending…</span>`;
+                labelsHtml += `<span class="label-status label-pending">Pending</span>`;
+                // Show retry count if any
+                if (retryCount > 0) {
+                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+                }
+                // Add Logs button for pending status too
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
             } else if (status === 'processing') {
-                return `<span class="status-badge processing">⏳ Processing…</span>`;
+                labelsHtml += `<span class="label-status label-processing">Processing</span>`;
+                // Show retry count if any
+                if (retryCount > 0) {
+                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+                }
+                // Add Stop button for videos being processed
+                buttonsHtml += `<button class="btn-stop" onclick="stopProcessing('${escapeAttr(video.id)}')">Stop</button>`;
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
+            } else if (status === 'failed_permanent') {
+                // Permanently failed after max retries
+                const errorTitle = video.error_message || 'Max retries exceeded';
+                labelsHtml += `<span class="label-status label-error" title="${escapeAttr(errorTitle)}">Failed</span>`;
+                labelsHtml += `<span class="label-status label-error" title="Max retries reached">3/3</span>`;
+
+                // Force retry option for permanent failures
+                buttonsHtml += `<button class="btn-retry" onclick="forceRetryVideo('${escapeAttr(video.id)}')">Force Retry</button>`;
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
+            } else if (status === 'failed_stopped') {
+                // User stopped processing
+                labelsHtml += `<span class="label-status label-error" title="Processing stopped by user">Stopped</span>`;
+
+                buttonsHtml += `<button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>`;
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
             } else if (status && status.startsWith('failed_')) {
                 // Parse specific error type from status
                 let errorType = 'Failed';
@@ -1521,13 +1615,23 @@ Transcript: {transcript}`;
                     errorType = 'Email';
                 }
 
-                return `
-                    <span class="status-badge error" title="${escapeAttr(errorTitle)}">${errorType}</span>
-                    <button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>
-                `;
+                // Labels row
+                labelsHtml += `<span class="label-status label-error" title="${escapeAttr(errorTitle)}">${errorType}</span>`;
+                // Show retry count if any
+                if (retryCount > 0) {
+                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+                }
+
+                // Buttons row
+                buttonsHtml += `<button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>`;
+                buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
             }
 
-            return '';
+            labelsHtml += '</div>';
+            buttonsHtml += '</div>';
+
+            // Return both rows combined
+            return labelsHtml + buttonsHtml;
         }
 
         async function showVideoLogs(videoId) {
@@ -1621,6 +1725,47 @@ Transcript: {transcript}`;
                 }
             } catch (error) {
                 showStatus('Failed to queue video for retry', true);
+                console.error(error);
+            }
+        }
+
+        async function stopProcessing(videoId) {
+            try {
+                const response = await fetch(`/api/videos/${videoId}/stop`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    showStatus('Processing stopped', false);
+                    // Update status immediately
+                    setTimeout(() => updateProcessingStatuses(), 500);
+                } else {
+                    throw new Error('Failed to stop processing');
+                }
+            } catch (error) {
+                showStatus('Failed to stop processing', true);
+                console.error(error);
+            }
+        }
+
+        async function forceRetryVideo(videoId) {
+            // Reset retry count and retry
+            try {
+                const response = await fetch(`/api/videos/${videoId}/force-retry`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    showStatus('Video queued for force retry. Updating...', false);
+                    setTimeout(() => updateProcessingStatuses(), 800);
+                    if (!feedRefreshInterval) {
+                        feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
+                    }
+                } else {
+                    throw new Error('Failed to force retry');
+                }
+            } catch (error) {
+                showStatus('Failed to force retry video', true);
                 console.error(error);
             }
         }

@@ -126,7 +126,7 @@
                 <div class="feed-controls">
                     <div class="feed-filters">
                         <select id="feedChannelFilter" class="setting-input" style="width: 200px;" onchange="filterFeed()">
-                            <option value="">All Channels</option>
+                            <option value="">All Sources</option>
                         </select>
 
                         <select id="feedSortOrder" class="setting-input" style="width: 150px;" onchange="filterFeed()">
@@ -214,6 +214,32 @@
                     <label class="setting-label">Max Videos Per Channel</label>
                     <input type="number" id="MAX_VIDEOS_PER_CHANNEL" class="setting-input trackable-input" data-section="video" min="1" max="20">
                     <div class="setting-description">Maximum videos to check per channel per cycle</div>
+                </div>
+            </div>
+
+            <!-- Transcript Settings -->
+            <div class="settings-section">
+                <h3>📝 Transcript Settings <span id="unsaved-transcript" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+
+                <div class="setting-row">
+                    <label class="setting-label">Transcript Provider</label>
+                    <select id="TRANSCRIPT_PROVIDER" class="setting-input trackable-input" data-section="transcript" onchange="toggleSupadataFields()">
+                        <option value="legacy">Legacy (youtube-transcript-api)</option>
+                        <option value="supadata">Supadata.ai (Recommended)</option>
+                    </select>
+                    <div class="setting-description">
+                        Supadata offers better reliability and less rate limiting.
+                        <a href="https://supadata.ai" target="_blank" style="color: #007bff;">Get API key</a>
+                    </div>
+                </div>
+
+                <div class="setting-row" id="supadata-api-row" style="display: none;">
+                    <label class="setting-label">Supadata API Key</label>
+                    <input type="password" id="SUPADATA_API_KEY" class="setting-input trackable-input" data-section="transcript" placeholder="sk_...">
+                    <div class="setting-description">
+                        Get your API key from <a href="https://supadata.ai" target="_blank" style="color: #007bff;">supadata.ai</a>
+                        (100 free credits/month, Pro: $29/mo for 10K credits)
+                    </div>
                 </div>
             </div>
 

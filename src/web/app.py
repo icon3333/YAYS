@@ -1053,6 +1053,7 @@ async def get_single_channel_stats(channel_id: str):
 @app.get("/api/videos/feed")
 async def get_videos_feed(
     channel_id: Optional[str] = None,
+    source_type: Optional[str] = None,
     limit: int = 25,
     offset: int = 0,
     order_by: str = 'recent'
@@ -1062,6 +1063,7 @@ async def get_videos_feed(
 
     Parameters:
     - channel_id: Filter by channel (optional)
+    - source_type: Filter by source type (e.g., 'via_manual') (optional)
     - limit: Number of videos per page (default 25)
     - offset: Pagination offset (default 0)
     - order_by: Sort order - 'recent', 'oldest', 'channel' (default 'recent')
@@ -1074,13 +1076,14 @@ async def get_videos_feed(
         # Get videos
         videos = video_db.get_processed_videos(
             channel_id=channel_id,
+            source_type=source_type,
             limit=limit,
             offset=offset,
             order_by=order_by
         )
 
         # Get total count for pagination
-        total_count = video_db.get_total_count(channel_id=channel_id)
+        total_count = video_db.get_total_count(channel_id=channel_id, source_type=source_type)
 
         logger.info(f"Retrieved {len(videos)} videos (offset {offset}, total {total_count})")
 
@@ -1194,6 +1197,9 @@ async def get_video_logs(video_id: str, lines: int = 800, context: int = 3):
                 seen.add(key)
                 collected.append(tail[j].rstrip('\n'))
 
+        # Reverse the order so newest logs appear first
+        collected.reverse()
+
         return JSONResponse(
             status_code=200,
             content={
@@ -1228,9 +1234,9 @@ async def retry_video_processing(video_id: str):
         video_db.reset_video_status(video_id)
         logger.info(f"Reset video {video_id} to pending status")
 
-        # Trigger immediate processing in background
+        # Trigger immediate processing in background using the same Python interpreter
         try:
-            subprocess.Popen(['python3', 'process_videos.py'])
+            subprocess.Popen([sys.executable, 'process_videos.py'])
             logger.info("Started background processing for retry")
         except Exception as e:
             logger.error(f"Failed to start background processing: {e}")
@@ -1244,6 +1250,84 @@ async def retry_video_processing(video_id: str):
         raise
     except Exception as e:
         logger.error(f"Error retrying video {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/videos/{video_id}/stop")
+async def stop_video_processing(video_id: str):
+    """
+    Stop processing for a video by marking it as failed_stopped
+    This allows user to cancel stuck or unwanted processing
+    """
+    try:
+        # Check if video exists
+        video = video_db.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Only stop if currently processing
+        if video.get('processing_status') != 'processing':
+            return {
+                "status": "info",
+                "message": "Video is not currently processing"
+            }
+
+        # Mark as stopped
+        video_db.update_video_processing(
+            video_id,
+            status='failed_stopped',
+            error_message='Processing stopped by user'
+        )
+        logger.info(f"Stopped processing for video {video_id}")
+
+        return {
+            "status": "success",
+            "message": "Processing stopped"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error stopping video {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/videos/{video_id}/force-retry")
+async def force_retry_video(video_id: str):
+    """
+    Force retry a permanently failed video by resetting retry count
+    """
+    try:
+        # Check if video exists
+        video = video_db.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Reset retry count and status
+        video_db.update_video_processing(
+            video_id,
+            status='pending',
+            retry_count=0,
+            error_message=None
+        )
+        logger.info(f"Force retry for video {video_id} - reset retry count")
+
+        # Trigger immediate processing
+        try:
+            subprocess.Popen([sys.executable, 'process_videos.py'])
+            logger.info("Started background processing for force retry")
+        except Exception as e:
+            logger.error(f"Failed to start background processing: {e}")
+
+        return {
+            "status": "success",
+            "message": "Video queued for force retry"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error force retrying video {video_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

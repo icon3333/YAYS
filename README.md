@@ -73,6 +73,28 @@ That's it. The script handles everything:
 
 **Test channel:** `UCddiUEpeqJcYeBxX1IVBKvQ` (The Verge)
 
+### Transcript Configuration
+
+YAYS now supports two transcript providers:
+
+#### Option 1: Supadata.ai (Recommended)
+- **Reliability:** Better handling of rate limits and IP blocks
+- **Setup:** Get API key from [supadata.ai](https://supadata.ai)
+- **Cost:** 100 free credits/month, Pro: $29/mo for 10K credits
+
+**How to enable:**
+1. Go to Settings → Transcript Settings
+2. Select "Supadata.ai (Recommended)" as provider
+3. Enter your API key
+4. Save settings
+
+#### Option 2: Legacy (youtube-transcript-api)
+- **Cost:** Free
+- **Reliability:** Subject to YouTube rate limiting (~20% failure rate)
+- **Default:** Already configured
+
+**Note:** Supadata offers significantly better reliability and is recommended for production use.
+
 ### Manual Processing
 
 Don't wait for the 4-hour interval:
@@ -230,7 +252,9 @@ MIT License - See [LICENSE](LICENSE) file.
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 - [OpenAI Python SDK](https://github.com/openai/openai-python) - API client
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Transcript extraction
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Channel discovery & metadata enrichment
+- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) - Transcript extraction (legacy)
+- [Supadata.ai](https://supadata.ai) - Managed transcript API service (optional)
 - [Docker](https://www.docker.com/) - Containerization
 
 ---
