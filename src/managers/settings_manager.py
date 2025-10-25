@@ -53,7 +53,7 @@ class SettingsManager:
             'SUPADATA_API_KEY': {
                 'type': 'secret',
                 'required': False,
-                'pattern': r'^sk_[A-Za-z0-9_-]+$',
+                'pattern': r'^sd_[A-Za-z0-9_-]{10,}$',
                 'description': 'Supadata.ai API Key for transcript service',
                 'default': ''
             },
@@ -197,6 +197,11 @@ class SettingsManager:
             if len(value) > 15:
                 return f"{value[:7]}***...***{value[-4:]}"
             return 'sk-***'
+        elif value.startswith('sd_'):
+            # Supadata API key: sd_***...***xxx
+            if len(value) > 15:
+                return f"{value[:5]}***...***{value[-4:]}"
+            return 'sd_***'
         else:
             # Generic password: all dots
             return '•' * min(len(value), 16)

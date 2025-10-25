@@ -1255,6 +1255,26 @@
             border-color: var(--grey-900);
         }
 
+        /* Stop button - same size as logs, red outline */
+        .btn-stop {
+            padding: 5px 12px;
+            background: transparent;
+            color: #d32f2f;
+            border: 1px solid #d32f2f;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-stop:hover {
+            background: rgba(211, 47, 47, 0.05);
+            border-color: #b71c1c;
+            color: #b71c1c;
+        }
+
         /* ============================================================================
            SUMMARY MODAL
            ============================================================================ */

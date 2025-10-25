@@ -1170,18 +1170,38 @@ async def get_video_logs(video_id: str, lines: int = 800, context: int = 3):
             if any(tok in ln for tok in token_lowers):
                 match_indices.append(i)
 
-        # If no matches, return a gentle message
+        # If no matches, check if we should show general logs for context
         if not match_indices:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "video_id": video_id,
-                    "title": video.get('title'),
-                    "status": video.get('processing_status'),
-                    "lines": [],
-                    "message": "No matching log lines found for this video in the recent log tail.",
-                }
-            )
+            # For pending/processing/failed videos, show recent initialization/error logs
+            status = video.get('processing_status', '')
+            if status in ['pending', 'processing', 'failed_transcript', 'failed_ai', 'failed_email']:
+                # Show last 50 lines of general logs for context (errors, initialization, etc.)
+                recent_context = min(50, len(tail))
+                context_lines = [ln.rstrip('\n') for ln in tail[-recent_context:]]
+                context_lines.reverse()  # Newest first
+
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "video_id": video_id,
+                        "title": video.get('title'),
+                        "status": status,
+                        "lines": context_lines,
+                        "message": f"No video-specific logs found yet. Showing recent general logs for context (status: {status})",
+                    }
+                )
+            else:
+                # For completed videos, empty logs means something went wrong
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "video_id": video_id,
+                        "title": video.get('title'),
+                        "status": status,
+                        "lines": [],
+                        "message": "No matching log lines found for this video in the recent log tail.",
+                    }
+                )
 
         # Collect context windows and de-duplicate while preserving order
         seen: set = set()

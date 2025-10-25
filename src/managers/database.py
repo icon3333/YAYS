@@ -81,7 +81,8 @@ class VideoDatabase:
             'processing_status': row['processing_status'],
             'error_message': row['error_message'],
             'email_sent': bool(row['email_sent']),
-            'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel'
+            'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel',
+            'retry_count': row['retry_count'] if 'retry_count' in row.keys() else 0
         }
 
         if include_summary:
@@ -453,7 +454,8 @@ class VideoDatabase:
                     processing_status,
                     error_message,
                     email_sent,
-                    source_type
+                    source_type,
+                    retry_count
                 FROM videos
             """
 

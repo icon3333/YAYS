@@ -504,6 +504,10 @@
         // Video feed functions
         let feedRefreshInterval = null;
 
+        // Logs modal auto-refresh
+        let logsRefreshInterval = null;
+        let currentLogsVideoId = null;
+
         /**
          * Load/render the video feed
          * @param {boolean} reset - when true, resets offset and clears list
@@ -582,7 +586,7 @@
                     const sourceInfoText = isManual ? 'manual' : 'channel';
 
                     div.innerHTML = `
-                        <div class="video-grid" id="video-actions-${video.id}" data-status="${video.processing_status || ''}">
+                        <div class="video-grid" id="video-actions-${video.id}" data-status="${video.processing_status || ''}" data-retry-count="${video.retry_count || 0}">
                             <div class="video-title" onclick="openYouTube('${escapeAttr(video.id)}')">
                                 ${escapeHtml(video.title)}
                             </div>
@@ -794,11 +798,19 @@
         });
 
         document.addEventListener('keydown', e => {
-            if (e.key === 'Escape') closeModal();
+            if (e.key === 'Escape') {
+                closeModal();
+                closeLogsModal();
+            }
         });
 
         document.getElementById('modal').addEventListener('click', e => {
             if (e.target.id === 'modal') closeModal();
+        });
+
+        // Close logs modal when clicking outside
+        document.getElementById('logsModal').addEventListener('click', e => {
+            if (e.target.id === 'logsModal') closeLogsModal();
         });
 
         // Load on start
@@ -912,11 +924,14 @@
                 const isSupadata = providerSelect.value === 'supadata';
                 supadataApiRow.style.display = isSupadata ? 'block' : 'none';
 
-                // If switching to supadata and no API key is set, mark as unsaved
+                // If switching to supadata and no API key is set, show unsaved indicator
                 if (isSupadata) {
                     const apiKeyField = document.getElementById('SUPADATA_API_KEY');
                     if (apiKeyField && !apiKeyField.value) {
-                        markSectionUnsaved('transcript');
+                        const unsavedIndicator = document.getElementById('unsaved-transcript');
+                        if (unsavedIndicator) {
+                            unsavedIndicator.style.display = 'inline';
+                        }
                     }
                 }
             }
@@ -1025,7 +1040,7 @@
                             } else {
                                 let placeholder = '16-character app password';
                                 if (key === 'OPENAI_API_KEY') placeholder = 'sk-...';
-                                else if (key === 'SUPADATA_API_KEY') placeholder = 'sk_...';
+                                else if (key === 'SUPADATA_API_KEY') placeholder = 'sd_...';
                                 element.placeholder = placeholder;
                             }
                         }
@@ -1128,6 +1143,18 @@
 
                 const maxVideos = document.getElementById('MAX_VIDEOS_PER_CHANNEL').value.trim();
                 if (maxVideos) settingsToSave['MAX_VIDEOS_PER_CHANNEL'] = maxVideos;
+
+                // Get transcript provider settings
+                settingsToSave['TRANSCRIPT_PROVIDER'] = document.getElementById('TRANSCRIPT_PROVIDER').value;
+
+                // Get Supadata API key if changed (don't save masked values)
+                const supadataKey = document.getElementById('SUPADATA_API_KEY').value.trim();
+                const isNewSupadataKey = supadataKey && !supadataKey.includes('***') && !supadataKey.includes('•');
+
+                // Only save if it's a new key (not masked or empty)
+                if (isNewSupadataKey) {
+                    settingsToSave['SUPADATA_API_KEY'] = supadataKey;
+                }
 
                 const response = await fetch('/api/settings', {
                     method: 'POST',
@@ -1418,6 +1445,12 @@ Transcript: {transcript}`;
                     showButtonConfirmation(button, '✓ Saved!');
                 }
 
+                // Hide unsaved indicator
+                const unsavedIndicator = document.getElementById('unsaved-prompt');
+                if (unsavedIndicator) {
+                    unsavedIndicator.style.display = 'none';
+                }
+
             } catch (error) {
                 // Show error in button
                 if (button) {
@@ -1525,12 +1558,14 @@ Transcript: {transcript}`;
                 const section = input.getAttribute('data-section');
                 if (section === 'email') {
                     document.getElementById('unsaved-email').style.display = 'inline';
-                } else if (section === 'app') {
-                    document.getElementById('unsaved-app').style.display = 'inline';
                 } else if (section === 'video') {
                     document.getElementById('unsaved-video').style.display = 'inline';
+                } else if (section === 'transcript') {
+                    document.getElementById('unsaved-transcript').style.display = 'inline';
                 } else if (section === 'ai-credentials') {
                     document.getElementById('unsaved-ai-credentials').style.display = 'inline';
+                } else if (section === 'prompt') {
+                    document.getElementById('unsaved-prompt').style.display = 'inline';
                 }
             };
 
@@ -1544,8 +1579,8 @@ Transcript: {transcript}`;
         saveAllSettings = async function(buttonElement) {
             await originalSaveAllSettings(buttonElement);
             document.getElementById('unsaved-email').style.display = 'none';
-            document.getElementById('unsaved-app').style.display = 'none';
             document.getElementById('unsaved-video').style.display = 'none';
+            document.getElementById('unsaved-transcript').style.display = 'none';
         };
 
         // ============================================================================
@@ -1634,8 +1669,40 @@ Transcript: {transcript}`;
             return labelsHtml + buttonsHtml;
         }
 
+        async function refreshLogsContent() {
+            if (!currentLogsVideoId) return;
+
+            try {
+                const resp = await fetch(`/api/videos/${currentLogsVideoId}/logs?lines=1200&context=4`);
+                if (!resp.ok) return;
+                const data = await resp.json();
+
+                const status = data.status || '';
+                const lines = data.lines || [];
+                const message = data.message || '';
+
+                // Update modal content
+                const statusEl = document.getElementById('logsStatus');
+                const bodyEl = document.getElementById('logsBody');
+
+                if (statusEl) statusEl.textContent = status ? `Status: ${status}` : '';
+
+                if (lines.length > 0) {
+                    bodyEl.textContent = lines.join('\n');
+                } else {
+                    bodyEl.textContent = message || 'No relevant log lines found.';
+                }
+
+            } catch (e) {
+                console.debug('Failed to refresh logs:', e);
+            }
+        }
+
         async function showVideoLogs(videoId) {
             try {
+                // Store video ID for refresh
+                currentLogsVideoId = videoId;
+
                 const resp = await fetch(`/api/videos/${videoId}/logs?lines=1200&context=4`);
                 if (!resp.ok) throw new Error('Failed to load logs');
                 const data = await resp.json();
@@ -1661,6 +1728,12 @@ Transcript: {transcript}`;
 
                 document.getElementById('logsModal').classList.add('show');
 
+                // Start auto-refresh every 5 seconds
+                if (logsRefreshInterval) {
+                    clearInterval(logsRefreshInterval);
+                }
+                logsRefreshInterval = setInterval(refreshLogsContent, 5000);
+
             } catch (e) {
                 showStatus('Failed to load logs', true);
                 console.error(e);
@@ -1670,6 +1743,13 @@ Transcript: {transcript}`;
         function closeLogsModal() {
             const modal = document.getElementById('logsModal');
             if (modal) modal.classList.remove('show');
+
+            // Stop auto-refresh
+            if (logsRefreshInterval) {
+                clearInterval(logsRefreshInterval);
+                logsRefreshInterval = null;
+            }
+            currentLogsVideoId = null;
         }
 
         async function showSummary(videoId) {
@@ -1708,56 +1788,117 @@ Transcript: {transcript}`;
 
         async function retryVideo(videoId) {
             try {
+                // Immediately update UI to show pending state
+                const actionsContainer = document.getElementById(`video-actions-${videoId}`);
+                if (actionsContainer) {
+                    // Get current retry count from the element or default to 0
+                    const currentRetryCount = parseInt(actionsContainer.dataset.retryCount || '0');
+                    const newRetryCount = currentRetryCount + 1;
+
+                    // Update to pending state immediately with updated retry count
+                    let labelsHtml = '<div class="video-labels">';
+                    labelsHtml += '<span class="label-status label-pending">Pending</span>';
+                    if (newRetryCount > 0) {
+                        labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${newRetryCount} of 3">${newRetryCount}/3</span>`;
+                    }
+                    labelsHtml += '</div>';
+                    let buttonsHtml = '<div class="video-buttons">';
+                    buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${videoId}')">Logs</button>`;
+                    buttonsHtml += '</div>';
+
+                    actionsContainer.innerHTML = labelsHtml + buttonsHtml;
+                    actionsContainer.dataset.status = 'pending';
+                    actionsContainer.dataset.retryCount = newRetryCount.toString();
+                }
+
                 const response = await fetch(`/api/videos/${videoId}/retry`, {
                     method: 'POST'
                 });
 
                 if (response.ok) {
-                    showStatus('Video queued for reprocessing. Updating...', false);
-                    // Prefer in-place status update for the retried video
-                    setTimeout(() => updateProcessingStatuses(), 800);
+                    showStatus('Video queued for reprocessing', false);
+                    // Update status after a delay to catch processing state
+                    setTimeout(() => updateProcessingStatuses(), 2000);
                     // Ensure periodic updates run until processing completes
                     if (!feedRefreshInterval) {
                         feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
                     }
                 } else {
+                    // Revert UI if request failed
                     throw new Error('Failed to retry');
                 }
             } catch (error) {
                 showStatus('Failed to queue video for retry', true);
                 console.error(error);
+                // Try to refresh the status to revert changes
+                updateProcessingStatuses();
             }
         }
 
         async function stopProcessing(videoId) {
             try {
+                // Immediately update UI to show stopped state
+                const actionsContainer = document.getElementById(`video-actions-${videoId}`);
+                if (actionsContainer) {
+                    let labelsHtml = '<div class="video-labels">';
+                    labelsHtml += '<span class="label-status label-error" title="Processing stopped by user">Stopped</span>';
+                    labelsHtml += '</div>';
+                    let buttonsHtml = '<div class="video-buttons">';
+                    buttonsHtml += `<button class="btn-retry" onclick="retryVideo('${videoId}')">Retry</button>`;
+                    buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${videoId}')">Logs</button>`;
+                    buttonsHtml += '</div>';
+
+                    actionsContainer.innerHTML = labelsHtml + buttonsHtml;
+                    actionsContainer.dataset.status = 'failed_stopped';
+                }
+
                 const response = await fetch(`/api/videos/${videoId}/stop`, {
                     method: 'POST'
                 });
 
                 if (response.ok) {
                     showStatus('Processing stopped', false);
-                    // Update status immediately
-                    setTimeout(() => updateProcessingStatuses(), 500);
+                    // Update status after a moment to sync with server
+                    setTimeout(() => updateProcessingStatuses(), 1000);
                 } else {
                     throw new Error('Failed to stop processing');
                 }
             } catch (error) {
                 showStatus('Failed to stop processing', true);
                 console.error(error);
+                // Try to refresh the status to revert changes
+                updateProcessingStatuses();
             }
         }
 
         async function forceRetryVideo(videoId) {
             // Reset retry count and retry
             try {
+                // Immediately update UI to show pending state with reset retry count
+                const actionsContainer = document.getElementById(`video-actions-${videoId}`);
+                if (actionsContainer) {
+                    // Force retry resets count to 1
+                    let labelsHtml = '<div class="video-labels">';
+                    labelsHtml += '<span class="label-status label-pending">Pending</span>';
+                    labelsHtml += '<span class="label-status label-warning" title="Retry attempt 1 of 3">1/3</span>';
+                    labelsHtml += '</div>';
+                    let buttonsHtml = '<div class="video-buttons">';
+                    buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${videoId}')">Logs</button>`;
+                    buttonsHtml += '</div>';
+
+                    actionsContainer.innerHTML = labelsHtml + buttonsHtml;
+                    actionsContainer.dataset.status = 'pending';
+                    actionsContainer.dataset.retryCount = '1';
+                }
+
                 const response = await fetch(`/api/videos/${videoId}/force-retry`, {
                     method: 'POST'
                 });
 
                 if (response.ok) {
-                    showStatus('Video queued for force retry. Updating...', false);
-                    setTimeout(() => updateProcessingStatuses(), 800);
+                    showStatus('Video queued for force retry', false);
+                    // Update status after a delay to catch processing state
+                    setTimeout(() => updateProcessingStatuses(), 2000);
                     if (!feedRefreshInterval) {
                         feedRefreshInterval = setInterval(autoRefreshFeedTick, 5000);
                     }
@@ -1767,6 +1908,8 @@ Transcript: {transcript}`;
             } catch (error) {
                 showStatus('Failed to force retry video', true);
                 console.error(error);
+                // Try to refresh the status to revert changes
+                updateProcessingStatuses();
             }
         }
 
@@ -1908,6 +2051,7 @@ Transcript: {transcript}`;
             if (e.key === 'Escape') {
                 closeModal();
                 closeSummaryModal();
+                closeLogsModal();
             }
         });
 

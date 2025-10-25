@@ -211,9 +211,9 @@
                 </div>
 
                 <div class="setting-row">
-                    <label class="setting-label">Max Videos Per Channel</label>
+                    <label class="setting-label">Video Processing for New Channels</label>
                     <input type="number" id="MAX_VIDEOS_PER_CHANNEL" class="setting-input trackable-input" data-section="video" min="1" max="20">
-                    <div class="setting-description">Maximum videos to check per channel per cycle</div>
+                    <div class="setting-description">Maximum videos to process whenn new channel is added</div>
                 </div>
             </div>
 
@@ -235,7 +235,7 @@
 
                 <div class="setting-row" id="supadata-api-row" style="display: none;">
                     <label class="setting-label">Supadata API Key</label>
-                    <input type="password" id="SUPADATA_API_KEY" class="setting-input trackable-input" data-section="transcript" placeholder="sk_...">
+                    <input type="password" id="SUPADATA_API_KEY" class="setting-input trackable-input" data-section="transcript" placeholder="sd_...">
                     <div class="setting-description">
                         Get your API key from <a href="https://supadata.ai" target="_blank" style="color: #007bff;">supadata.ai</a>
                         (100 free credits/month, Pro: $29/mo for 10K credits)
@@ -426,11 +426,11 @@
 
             <!-- AI Prompt Template Section -->
             <div class="settings-section">
-                <h3>✏️ AI Prompt Template</h3>
+                <h3>✏️ AI Prompt Template <span id="unsaved-prompt" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
                     <label class="setting-label">Prompt</label>
-                    <textarea id="promptEditor" class="prompt-editor"></textarea>
+                    <textarea id="promptEditor" class="prompt-editor trackable-input" data-section="prompt"></textarea>
                     <div class="setting-description">
                         Available variables: {title}, {duration}, {transcript}
                     </div>
