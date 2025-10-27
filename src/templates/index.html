@@ -5,15 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>YAYS - Yet Another Youtube Summarizer</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/iconoir-icons/iconoir@main/css/iconoir.css">
     <link rel="stylesheet" href="/static/css/main.css">
 </head>
 <body>
     <!-- Header with Tabs -->
     <header>
-        <h1>YAYS - Yet Another Youtube Summarizer</h1>
+        <h1><img src="/static/yays_logo.png" alt="YAYS" class="header-logo"> YAYS - Yet Another Youtube Summarizer</h1>
         <nav class="tabs">
             <button class="tab-btn active" onclick="showTab('channels')">Channels</button>
             <button class="tab-btn" onclick="showTab('feed')">Feed</button>
@@ -30,7 +34,7 @@
         <div class="settings-container">
             <!-- Add Channel Section -->
             <div class="settings-section">
-                <h3>➕ Add Channel</h3>
+                <h3><i class="iconoir-plus"></i> Add Channel</h3>
 
                 <div class="setting-row">
                     <label class="setting-label">Channel ID or URL</label>
@@ -70,7 +74,7 @@
 
             <!-- Active Channels Section -->
             <div class="settings-section" id="channelsSection">
-                <h3>📺 Active Channels (<span id="count">0</span>)</h3>
+                <h3><i class="iconoir-youtube"></i> Active Channels (<span id="count">0</span>)</h3>
 
                 <div id="loading" class="loading">Loading channels...</div>
 
@@ -92,7 +96,7 @@
             <!-- Videos are marked with source_type='via_manual' in database -->
             <!-- Follows same processing pipeline: transcript -> AI summary -> email -->
             <div class="settings-section">
-                <h3>⚡ Quick Add Video</h3>
+                <h3><i class="iconoir-flash"></i> Quick Add Video</h3>
 
                 <div class="setting-row">
                     <label class="setting-label">YouTube Video URL</label>
@@ -120,7 +124,7 @@
 
             <!-- Processed Videos Feed Section -->
             <div class="settings-section" id="feedSection">
-                <h3>🎬 Processed Videos (<span id="feedCount">0</span>)</h3>
+                <h3><i class="iconoir-video-camera"></i> Processed Videos (<span id="feedCount">0</span>)</h3>
 
                 <!-- Feed Controls -->
                 <div class="feed-controls">
@@ -160,7 +164,7 @@
         <div class="settings-container">
             <!-- Email Configuration Section -->
             <div class="settings-section">
-                <h3>📧 Email Configuration <span id="unsaved-email" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+                <h3><i class="iconoir-mail"></i> Email Configuration <span id="unsaved-email" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
                     <label class="setting-label">Send Email Summaries</label>
@@ -194,7 +198,7 @@
 
             <!-- Video Processing Settings -->
             <div class="settings-section">
-                <h3>📹 Video Processing <span id="unsaved-video" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+                <h3><i class="iconoir-settings"></i> Video Processing <span id="unsaved-video" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
                     <label class="setting-label">Auto-Check Interval (hours)</label>
@@ -209,26 +213,31 @@
                     </div>
                     <div class="setting-description">Ignore videos shorter than 60 seconds</div>
                 </div>
-
-                <div class="setting-row">
-                    <label class="setting-label">Video Processing for New Channels</label>
-                    <input type="number" id="MAX_VIDEOS_PER_CHANNEL" class="setting-input trackable-input" data-section="video" min="1" max="20">
-                    <div class="setting-description">Maximum videos to process whenn new channel is added</div>
-                </div>
             </div>
 
             <!-- Transcript Settings -->
             <div class="settings-section">
-                <h3>📝 Transcript Settings <span id="unsaved-transcript" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+                <h3><i class="iconoir-page-edit"></i> Transcript Settings <span id="unsaved-transcript" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
-                    <label class="setting-label">Transcript Provider</label>
-                    <select id="TRANSCRIPT_PROVIDER" class="setting-input trackable-input" data-section="transcript" onchange="toggleSupadataFields()">
-                        <option value="legacy">Legacy (youtube-transcript-api)</option>
-                        <option value="supadata">Supadata.ai (Recommended)</option>
-                    </select>
+                    <div class="setting-description" style="margin-bottom: 16px; padding: 12px; background: #f8f9fa; border-left: 3px solid #007bff; border-radius: 4px;">
+                        <strong>4-Method Cascade:</strong> All videos automatically try these methods in order:
+                        <ol style="margin: 8px 0 0 20px; padding: 0;">
+                            <li>YouTube Transcript API (free)</li>
+                            <li>yt-dlp Subtitles (free)</li>
+                            <li>Direct Timedtext API (free)</li>
+                            <li>Supadata.ai Fallback (paid, optional)</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <label class="setting-label">
+                        <input type="checkbox" id="ENABLE_SUPADATA_FALLBACK" class="trackable-input" data-section="transcript" onchange="toggleSupadataFallback()" style="margin-right: 8px; width: auto; height: auto;">
+                        Activate Supadata Fallback (paid after 100 fetches)
+                    </label>
                     <div class="setting-description">
-                        Supadata offers better reliability and less rate limiting.
+                        Enable Supadata.ai as the final fallback method when all free methods fail.
                         <a href="https://supadata.ai" target="_blank" style="color: #007bff;">Get API key</a>
                     </div>
                 </div>
@@ -259,7 +268,7 @@
 
             <!-- Backup & Restore Section -->
             <div class="settings-section" style="margin-top: 40px;">
-                <h3>💾 Backup & Restore</h3>
+                <h3><i class="iconoir-floppy-disk"></i> Backup & Restore</h3>
                 <div class="setting-description" style="margin-bottom: 20px;">
                     Export your data for backup or migration. Import previously exported files to restore your configuration.
                 </div>
@@ -302,7 +311,7 @@
                         <!-- Dropzone - spans 2 export buttons height -->
                         <div id="importDropzone" class="import-dropzone" style="min-height: 150px;">
                             <div id="dropzoneDefault" class="dropzone-content">
-                                <div style="font-size: 24px; margin-bottom: 10px;">📁</div>
+                                <i class="iconoir-folder" style="font-size: 24px; margin-bottom: 10px;"></i>
                                 <div>Drop JSON file here</div>
                                 <div style="font-size: 12px; color: #666; margin-top: 8px;">or click below</div>
                             </div>
@@ -342,7 +351,7 @@
             <!-- Danger Zone Section (Separate) -->
             <div class="settings-section" style="margin-top: 40px; border: 2px solid #ff4444;">
                 <h3 style="color: #ff4444; cursor: pointer; user-select: none;" onclick="toggleDangerZone()">
-                    <span id="dangerZoneToggle">▶</span> ⚠️ Danger Zone
+                    <span id="dangerZoneToggle">▶</span> <i class="iconoir-warning-triangle"></i> Danger Zone
                 </h3>
 
                 <div id="dangerZoneContent" style="display: none;">
@@ -391,7 +400,7 @@
         <div class="settings-container">
             <!-- AI Settings Section -->
             <div class="settings-section">
-                <h3>🔑 AI Settings <span id="unsaved-ai-credentials" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+                <h3><i class="iconoir-key"></i> AI Settings <span id="unsaved-ai-credentials" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
                     <label class="setting-label">OpenAI API Key</label>
@@ -426,7 +435,7 @@
 
             <!-- AI Prompt Template Section -->
             <div class="settings-section">
-                <h3>✏️ AI Prompt Template <span id="unsaved-prompt" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
+                <h3><i class="iconoir-edit-pencil"></i> AI Prompt Template <span id="unsaved-prompt" class="unsaved-indicator" style="display: none;">● Unsaved changes</span></h3>
 
                 <div class="setting-row">
                     <label class="setting-label">Prompt</label>

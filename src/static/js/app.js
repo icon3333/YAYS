@@ -3,10 +3,271 @@
         let channelNames = {};
         let channelStats = {};
         let isLoading = false;
+        let isLoadingSettings = false;  // Track when programmatically loading settings to prevent false "unsaved" indicators
         let pendingRemoval = null;
         let pendingAction = null;  // For storing the action to be confirmed
         let feedOffset = 0;
         let feedLimit = 25;
+
+        // yt-dlp timing configuration for countdown timers
+        let ytdlpTiming = {
+            estimated_channel_fetch: 5,
+            estimated_video_fetch: 8,
+            estimated_metadata_fetch: 3
+        };
+
+        // Active countdown timer intervals
+        let activeCountdownTimers = [];
+
+        // Video countdown tracking (for status labels)
+        let videoCountdowns = {}; // { videoId: { remaining: seconds, interval: intervalId, baseLabel: string } }
+
+        // ============================================================================
+        // SETTINGS MANAGEMENT - Centralized Configuration
+        // ============================================================================
+
+        /**
+         * Centralized configuration for settings sections and their unsaved indicators
+         * Single source of truth for section-to-indicator mappings
+         */
+        const SETTINGS_CONFIG = {
+            sections: {
+                'email': {
+                    indicatorId: 'unsaved-email',
+                    saveFunction: 'saveAllSettings'
+                },
+                'video': {
+                    indicatorId: 'unsaved-video',
+                    saveFunction: 'saveAllSettings'
+                },
+                'transcript': {
+                    indicatorId: 'unsaved-transcript',
+                    saveFunction: 'saveAllSettings'
+                },
+                'ai-credentials': {
+                    indicatorId: 'unsaved-ai-credentials',
+                    saveFunction: 'saveAICredentials'
+                },
+                'prompt': {
+                    indicatorId: 'unsaved-prompt',
+                    saveFunction: 'savePrompt'
+                }
+            }
+        };
+
+        /**
+         * Show unsaved indicator for a settings section
+         * Respects isLoadingSettings flag to prevent false positives during programmatic loads
+         * @param {string} section - The section name (e.g., 'email', 'video')
+         */
+        function showUnsavedIndicator(section) {
+            // Don't show unsaved indicator if we're programmatically loading settings
+            if (isLoadingSettings) {
+                return;
+            }
+
+            const config = SETTINGS_CONFIG.sections[section];
+            if (!config) {
+                console.warn(`Unknown settings section: ${section}`);
+                return;
+            }
+
+            const indicator = document.getElementById(config.indicatorId);
+            if (indicator) {
+                indicator.style.display = 'inline';
+            }
+        }
+
+        /**
+         * Hide unsaved indicator for a settings section
+         * @param {string} section - The section name (e.g., 'email', 'video')
+         */
+        function hideUnsavedIndicator(section) {
+            const config = SETTINGS_CONFIG.sections[section];
+            if (!config) {
+                console.warn(`Unknown settings section: ${section}`);
+                return;
+            }
+
+            const indicator = document.getElementById(config.indicatorId);
+            if (indicator) {
+                indicator.style.display = 'none';
+            }
+        }
+
+        /**
+         * Hide unsaved indicators for multiple sections
+         * @param {string[]} sections - Array of section names
+         */
+        function hideUnsavedIndicators(sections) {
+            sections.forEach(section => hideUnsavedIndicator(section));
+        }
+
+        /**
+         * Hide all unsaved indicators across all settings sections
+         */
+        function hideAllUnsavedIndicators() {
+            Object.keys(SETTINGS_CONFIG.sections).forEach(section => {
+                hideUnsavedIndicator(section);
+            });
+        }
+
+        /**
+         * Validate settings configuration on startup
+         * Checks that all data-section attributes have corresponding config
+         * and that all indicator elements exist in the DOM
+         */
+        function validateSettingsConfig() {
+            const trackableInputs = document.querySelectorAll('.trackable-input');
+            const missingSections = new Set();
+
+            // Check for inputs with unknown sections
+            trackableInputs.forEach(input => {
+                const section = input.getAttribute('data-section');
+                if (section && !SETTINGS_CONFIG.sections[section]) {
+                    missingSections.add(section);
+                }
+            });
+
+            if (missingSections.size > 0) {
+                console.error('Settings config missing for sections:', Array.from(missingSections));
+            }
+
+            // Check for missing indicator elements
+            Object.entries(SETTINGS_CONFIG.sections).forEach(([section, config]) => {
+                const indicator = document.getElementById(config.indicatorId);
+                if (!indicator) {
+                    console.error(`Missing indicator element: ${config.indicatorId} for section: ${section}`);
+                }
+            });
+        }
+
+        // ============================================================================
+        // YTDLP TIMING
+        // ============================================================================
+
+        // Load yt-dlp timing configuration on startup
+        async function loadYTDLPTiming() {
+            try {
+                const response = await fetch('/api/ytdlp/timing');
+                if (response.ok) {
+                    ytdlpTiming = await response.json();
+                    console.log('Loaded yt-dlp timing:', ytdlpTiming);
+                }
+            } catch (error) {
+                console.warn('Failed to load yt-dlp timing, using defaults:', error);
+            }
+        }
+
+        /**
+         * Start a countdown timer on a button element
+         * @param {HTMLElement} button - The button element to update
+         * @param {string} baseText - The base text to show (e.g., "Resolving")
+         * @param {number} seconds - Total seconds to count down
+         * @param {boolean} showCountdown - Whether to show the countdown (default: true)
+         * @returns {number} - The interval ID
+         */
+        function startButtonCountdown(button, baseText, seconds, showCountdown = true) {
+            // Clear any existing timer for this button
+            if (button._countdownInterval) {
+                clearInterval(button._countdownInterval);
+            }
+
+            if (!showCountdown || seconds <= 0) {
+                button.textContent = `${baseText}...`;
+                return null;
+            }
+
+            let remaining = Math.ceil(seconds);
+
+            // Update immediately
+            button.textContent = `${baseText}... (${remaining}s)`;
+
+            // Update every second
+            const interval = setInterval(() => {
+                remaining--;
+                if (remaining > 0) {
+                    button.textContent = `${baseText}... (${remaining}s)`;
+                } else {
+                    button.textContent = `${baseText}...`;
+                    clearInterval(interval);
+                    button._countdownInterval = null;
+                }
+            }, 1000);
+
+            // Store interval ID on button for cleanup
+            button._countdownInterval = interval;
+            activeCountdownTimers.push(interval);
+
+            return interval;
+        }
+
+        /**
+         * Clear countdown timer for a specific button
+         * @param {HTMLElement} button - The button element
+         */
+        function clearButtonCountdown(button) {
+            if (button._countdownInterval) {
+                clearInterval(button._countdownInterval);
+                button._countdownInterval = null;
+            }
+        }
+
+        /**
+         * Clear all active countdown timers
+         */
+        function clearAllCountdownTimers() {
+            activeCountdownTimers.forEach(interval => clearInterval(interval));
+            activeCountdownTimers = [];
+        }
+
+        /**
+         * Update countdown for a video status label
+         * @param {string} videoId - Video ID
+         * @param {number} seconds - Countdown in seconds
+         */
+        function updateVideoCountdown(videoId, seconds) {
+            // Clear existing countdown for this video
+            if (videoCountdowns[videoId] && videoCountdowns[videoId].interval) {
+                clearInterval(videoCountdowns[videoId].interval);
+            }
+
+            // Get the status label element
+            const statusLabel = document.querySelector(`#video-${videoId} .label-status`);
+            if (!statusLabel) return;
+
+            // Store the base label text (without countdown)
+            const baseLabel = statusLabel.textContent.replace(/\s*\(\d+s\)$/, '');
+
+            // Update the countdown display
+            videoCountdowns[videoId] = {
+                remaining: seconds,
+                baseLabel: baseLabel,
+                interval: setInterval(() => {
+                    const countdown = videoCountdowns[videoId];
+                    if (!countdown || countdown.remaining <= 0) {
+                        // Countdown finished - remove it
+                        if (videoCountdowns[videoId]) {
+                            clearInterval(videoCountdowns[videoId].interval);
+                            delete videoCountdowns[videoId];
+                        }
+                        if (statusLabel) {
+                            statusLabel.textContent = baseLabel;
+                        }
+                        return;
+                    }
+
+                    // Update label with countdown
+                    countdown.remaining--;
+                    if (statusLabel) {
+                        statusLabel.textContent = `${baseLabel} (${countdown.remaining}s)`;
+                    }
+                }, 1000)
+            };
+
+            // Set initial text
+            statusLabel.textContent = `${baseLabel} (${seconds}s)`;
+        }
 
         // Load channels
         async function loadChannels() {
@@ -25,7 +286,7 @@
                 renderChannels();
 
                 // Load video feed
-                await loadVideoFeed();
+                await loadVideoFeed(true);
 
                 // Populate channel filter
                 populateChannelFilter();
@@ -85,13 +346,13 @@
                         </div>
                         <div class="channel-stats">
                             <span class="channel-stat">
-                                <span class="stat-icon">📊</span>
+                                <i class="iconoir-stats-report stat-icon"></i>
                                 <span class="stat-value">${stats.total_videos || 0}</span>
                                 <span class="stat-label">summaries</span>
                             </span>
                             <span class="stat-separator">•</span>
                             <span class="channel-stat">
-                                <span class="stat-icon">⏱️</span>
+                                <i class="iconoir-timer stat-icon"></i>
                                 <span class="stat-value">${stats.hours_saved || 0}</span>
                                 <span class="stat-label">total hours</span>
                             </span>
@@ -279,7 +540,7 @@
 
                 // Reload the feed
                 feedOffset = 0;
-                await loadVideoFeed();
+                await loadVideoFeed(true);
             } catch (error) {
                 showSettingsStatus('Failed to reset feed history: ' + error.message, true);
             }
@@ -351,7 +612,9 @@
             // This will handle URLs, @handles, and channel IDs
             isLoading = true;
             addBtn.disabled = true;
-            addBtn.textContent = 'Resolving...';
+
+            // Start countdown timer for channel resolution
+            startButtonCountdown(addBtn, 'Resolving', ytdlpTiming.estimated_channel_fetch);
 
             let channelId;
             let channelName;
@@ -364,6 +627,7 @@
                     showStatus(error.detail || 'Invalid channel', true);
                     isLoading = false;
                     addBtn.disabled = false;
+                    clearButtonCountdown(addBtn);
                     addBtn.textContent = 'Add Channel';
                     return;
                 }
@@ -381,6 +645,7 @@
                 showStatus('Failed to resolve channel: ' + error.message, true);
                 isLoading = false;
                 addBtn.disabled = false;
+                clearButtonCountdown(addBtn);
                 addBtn.textContent = 'Add Channel';
                 return;
             }
@@ -390,6 +655,7 @@
                 showStatus('Channel already exists', true);
                 isLoading = false;
                 addBtn.disabled = false;
+                clearButtonCountdown(addBtn);
                 addBtn.textContent = 'Add Channel';
                 return;
             }
@@ -404,7 +670,9 @@
 
             // If save was successful, fetch initial videos
             if (saved) {
-                addBtn.textContent = 'Fetching videos...';
+                // Start countdown timer for video fetching
+                startButtonCountdown(addBtn, 'Fetching videos', ytdlpTiming.estimated_video_fetch);
+
                 try {
                     const response = await fetch(`/api/channels/${encodeURIComponent(channelId)}/fetch-initial-videos`, {
                         method: 'POST'
@@ -428,6 +696,7 @@
 
             isLoading = false;
             addBtn.disabled = false;
+            clearButtonCountdown(addBtn);
             addBtn.textContent = 'Add Channel';
         }
 
@@ -559,7 +828,12 @@
 
                 // Check if any videos are processing
                 const hasProcessingVideos = data.videos.some(v =>
-                    v.processing_status === 'processing' || v.processing_status === 'pending'
+                    v.processing_status === 'processing' ||
+                    v.processing_status === 'pending' ||
+                    v.processing_status === 'fetching_metadata' ||
+                    v.processing_status === 'fetching_transcript' ||
+                    v.processing_status === 'generating_summary' ||
+                    v.processing_status === 'sending_email'
                 );
 
                 // Start auto-refresh if videos are processing, stop otherwise
@@ -581,9 +855,15 @@
                     div.id = `video-${video.id}`;
                     div.dataset.videoId = video.id;
 
-                    // Build third line source tag and footer
+                    // Build footer to show source type (manual or channel) and transcript source
                     const isManual = video.source_type === 'via_manual';
                     const sourceInfoText = isManual ? 'manual' : 'channel';
+
+                    // Add transcript source if available
+                    let fullSourceText = sourceInfoText;
+                    if (video.transcript_source) {
+                        fullSourceText += ` • ${video.transcript_source}`;
+                    }
 
                     div.innerHTML = `
                         <div class="video-grid" id="video-actions-${video.id}" data-status="${video.processing_status || ''}" data-retry-count="${video.retry_count || 0}">
@@ -601,7 +881,7 @@
                         </div>
                         <div class="video-footer">
                             <div class="video-source">
-                                <span class="video-source-text">${sourceInfoText}</span>
+                                <span class="video-source-text">${fullSourceText}</span>
                             </div>
                         </div>
                     `;
@@ -656,7 +936,12 @@
 
         // Find all action nodes that are still pending/processing
         function getProcessingActionNodes() {
-            const selector = '#videoFeed .video-grid[data-status="pending"], #videoFeed .video-grid[data-status="processing"]';
+            const selector = '#videoFeed .video-grid[data-status="pending"], ' +
+                           '#videoFeed .video-grid[data-status="processing"], ' +
+                           '#videoFeed .video-grid[data-status="fetching_metadata"], ' +
+                           '#videoFeed .video-grid[data-status="fetching_transcript"], ' +
+                           '#videoFeed .video-grid[data-status="generating_summary"], ' +
+                           '#videoFeed .video-grid[data-status="sending_email"]';
             return Array.from(document.querySelectorAll(selector));
         }
 
@@ -684,6 +969,10 @@
                     const currentStatus = gridEl.getAttribute('data-status') || '';
                     const newStatus = latest.processing_status || '';
 
+                    // Update metadata fields (title, duration, channel, date) if they've changed
+                    // This provides live updates during processing without full page refresh
+                    updateVideoMetadata(videoId, latest);
+
                     if (newStatus !== currentStatus || newStatus === 'success') {
                         // Update labels and buttons (remove old ones, add new ones)
                         const oldLabels = gridEl.querySelector('.video-labels');
@@ -696,12 +985,107 @@
                         title.insertAdjacentHTML('afterend', renderVideoActions(latest));
 
                         gridEl.setAttribute('data-status', newStatus);
+
+                        // Update video footer with transcript source if video completed
+                        if (newStatus === 'success' && latest.transcript_source) {
+                            const footer = videoEl.querySelector('.video-footer .video-source-text');
+                            if (footer) {
+                                const isManual = latest.source_type === 'via_manual';
+                                const sourceInfoText = isManual ? 'manual' : 'channel';
+                                footer.textContent = `${sourceInfoText} • ${latest.transcript_source}`;
+                            }
+                        }
+                    }
+
+                    // Check for countdown in logs (for all processing statuses)
+                    if (newStatus !== 'success' && newStatus !== 'failed_permanent') {
+                        try {
+                            const logsResp = await fetch(`/api/videos/${videoId}/logs?lines=200&context=0`);
+                            if (logsResp.ok) {
+                                const logsData = await logsResp.json();
+                                const lines = logsData.lines || [];
+
+                                // Find the latest "Sleeping" log line
+                                const sleepingMatch = lines.find(line => line.includes('Sleeping') && line.includes('s '));
+                                if (sleepingMatch) {
+                                    const countdownMatch = sleepingMatch.match(/Sleeping\s+([\d.]+)s/);
+                                    if (countdownMatch) {
+                                        const countdown = Math.ceil(parseFloat(countdownMatch[1]));
+                                        updateVideoCountdown(videoId, countdown);
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // Ignore log fetch errors
+                            console.debug('Log fetch failed for', videoId, e);
+                        }
                     }
                 } catch (e) {
                     // Ignore transient errors
                     console.debug('Status update failed for', videoId, e);
                 }
             }));
+        }
+
+        // Update video metadata fields in the DOM when they change
+        // This enables live updates during video processing without full page refresh
+        function updateVideoMetadata(videoId, latestData) {
+            const videoEl = document.querySelector(`#video-${videoId}`);
+            if (!videoEl) return { updated: false };
+
+            let hasChanges = false;
+            const changes = {};
+
+            // Update title if changed
+            const titleEl = videoEl.querySelector('.video-title');
+            if (titleEl && latestData.title) {
+                const currentTitle = titleEl.textContent.trim();
+                if (currentTitle !== latestData.title) {
+                    titleEl.textContent = latestData.title;
+                    changes.title = { from: currentTitle, to: latestData.title };
+                    hasChanges = true;
+                }
+            }
+
+            // Update duration if changed
+            const durationEl = videoEl.querySelector('.video-duration');
+            if (durationEl && latestData.duration_formatted) {
+                const currentDuration = durationEl.textContent.trim();
+                if (currentDuration !== latestData.duration_formatted) {
+                    durationEl.textContent = latestData.duration_formatted;
+                    changes.duration = { from: currentDuration, to: latestData.duration_formatted };
+                    hasChanges = true;
+                }
+            }
+
+            // Update channel name if changed
+            const channelEl = videoEl.querySelector('.video-channel');
+            if (channelEl && latestData.channel_name) {
+                const currentChannel = channelEl.textContent.trim();
+                if (currentChannel !== latestData.channel_name) {
+                    channelEl.textContent = latestData.channel_name;
+                    changes.channel = { from: currentChannel, to: latestData.channel_name };
+                    hasChanges = true;
+                }
+            }
+
+            // Update upload date if changed
+            const dateEl = videoEl.querySelector('.video-date');
+            if (dateEl && latestData.upload_date_formatted) {
+                const currentDate = dateEl.textContent.trim();
+                if (currentDate !== latestData.upload_date_formatted) {
+                    dateEl.textContent = latestData.upload_date_formatted;
+                    changes.upload_date = { from: currentDate, to: latestData.upload_date_formatted };
+                    hasChanges = true;
+                }
+            }
+
+            // Log changes for debugging (only if something changed)
+            if (hasChanges) {
+                console.log(`📝 Updated metadata for video ${videoId}:`, changes);
+            }
+
+            return { updated: hasChanges, changes };
         }
 
         function viewChannelFeed(channelId) {
@@ -814,7 +1198,11 @@
         });
 
         // Load on start
+        loadYTDLPTiming();
         loadChannels();
+
+        // Validate settings configuration
+        validateSettingsConfig();
 
         // Restore the last active tab from localStorage
         const savedTab = localStorage.getItem('activeTab');
@@ -914,26 +1302,18 @@
         }
 
         /**
-         * Toggle visibility of Supadata API key field based on selected provider
+         * Toggle visibility of Supadata API key field based on checkbox
          */
-        function toggleSupadataFields() {
-            const providerSelect = document.getElementById('TRANSCRIPT_PROVIDER');
+        function toggleSupadataFallback() {
+            const fallbackCheckbox = document.getElementById('ENABLE_SUPADATA_FALLBACK');
             const supadataApiRow = document.getElementById('supadata-api-row');
 
-            if (providerSelect && supadataApiRow) {
-                const isSupadata = providerSelect.value === 'supadata';
-                supadataApiRow.style.display = isSupadata ? 'block' : 'none';
+            if (fallbackCheckbox && supadataApiRow) {
+                const isEnabled = fallbackCheckbox.checked;
+                supadataApiRow.style.display = isEnabled ? 'block' : 'none';
 
-                // If switching to supadata and no API key is set, show unsaved indicator
-                if (isSupadata) {
-                    const apiKeyField = document.getElementById('SUPADATA_API_KEY');
-                    if (apiKeyField && !apiKeyField.value) {
-                        const unsavedIndicator = document.getElementById('unsaved-transcript');
-                        if (unsavedIndicator) {
-                            unsavedIndicator.style.display = 'inline';
-                        }
-                    }
-                }
+                // Show unsaved indicator when checkbox state changes (using centralized utility)
+                showUnsavedIndicator('transcript');
             }
         }
 
@@ -1016,6 +1396,9 @@
 
         async function loadSettings() {
             try {
+                // Set flag to prevent showing unsaved indicators during programmatic value setting
+                isLoadingSettings = true;
+
                 // Load settings first to get the saved OPENAI_MODEL value
                 const response = await fetch('/api/settings');
                 if (!response.ok) throw new Error('Failed to load settings');
@@ -1058,7 +1441,10 @@
                             }
                         }
                     } else if (element) {
-                        if (info.type === 'enum') {
+                        // Handle checkbox elements (they need .checked, not .value)
+                        if (element.type === 'checkbox') {
+                            element.checked = (info.value || info.default) === 'true';
+                        } else if (info.type === 'enum') {
                             element.value = info.value || info.default;
                         } else {
                             element.value = info.value || info.default;
@@ -1071,7 +1457,6 @@
                 document.getElementById('SUMMARY_LENGTH').value = config.SUMMARY_LENGTH || '500';
                 document.getElementById('USE_SUMMARY_LENGTH').checked = config.USE_SUMMARY_LENGTH === 'true';
                 document.getElementById('SKIP_SHORTS').checked = config.SKIP_SHORTS === 'true';
-                document.getElementById('MAX_VIDEOS_PER_CHANNEL').value = config.MAX_VIDEOS_PER_CHANNEL || '5';
 
                 // Toggle summary length input visibility
                 toggleSummaryLengthInput();
@@ -1079,12 +1464,15 @@
                 // Toggle email fields based on SEND_EMAIL_SUMMARIES
                 toggleEmailFields();
 
-                // Toggle Supadata API key field based on provider
-                toggleSupadataFields();
+                // Toggle Supadata API key field based on fallback checkbox
+                toggleSupadataFallback();
 
             } catch (error) {
                 showSettingsStatus('Failed to load settings', true);
                 console.error(error);
+            } finally {
+                // Always reset the flag, even if there was an error
+                isLoadingSettings = false;
             }
         }
 
@@ -1141,11 +1529,8 @@
                 // Get config settings (only include non-empty values)
                 settingsToSave['SKIP_SHORTS'] = document.getElementById('SKIP_SHORTS').checked ? 'true' : 'false';
 
-                const maxVideos = document.getElementById('MAX_VIDEOS_PER_CHANNEL').value.trim();
-                if (maxVideos) settingsToSave['MAX_VIDEOS_PER_CHANNEL'] = maxVideos;
-
-                // Get transcript provider settings
-                settingsToSave['TRANSCRIPT_PROVIDER'] = document.getElementById('TRANSCRIPT_PROVIDER').value;
+                // Get Supadata fallback settings
+                settingsToSave['ENABLE_SUPADATA_FALLBACK'] = document.getElementById('ENABLE_SUPADATA_FALLBACK').checked ? 'true' : 'false';
 
                 // Get Supadata API key if changed (don't save masked values)
                 const supadataKey = document.getElementById('SUPADATA_API_KEY').value.trim();
@@ -1173,6 +1558,9 @@
                 if (button) {
                     showButtonConfirmation(button, '✓ Saved!');
                 }
+
+                // Hide unsaved indicators for sections saved by this function
+                hideUnsavedIndicators(['email', 'video', 'transcript']);
 
                 // Show restart notification after button confirmation completes
                 if (result.restart_required) {
@@ -1402,6 +1790,9 @@ Transcript: {transcript}`;
 
         async function loadPrompt() {
             try {
+                // Set flag to prevent showing unsaved indicators during programmatic value setting
+                isLoadingSettings = true;
+
                 const response = await fetch('/api/settings/prompt');
                 if (!response.ok) throw new Error('Failed to load prompt');
 
@@ -1411,6 +1802,9 @@ Transcript: {transcript}`;
             } catch (error) {
                 showAIStatus('Failed to load prompt', true);
                 console.error(error);
+            } finally {
+                // Always reset the flag, even if there was an error
+                isLoadingSettings = false;
             }
         }
 
@@ -1446,10 +1840,7 @@ Transcript: {transcript}`;
                 }
 
                 // Hide unsaved indicator
-                const unsavedIndicator = document.getElementById('unsaved-prompt');
-                if (unsavedIndicator) {
-                    unsavedIndicator.style.display = 'none';
-                }
+                hideUnsavedIndicator('prompt');
 
             } catch (error) {
                 // Show error in button
@@ -1497,8 +1888,8 @@ Transcript: {transcript}`;
 
                 settingsToSave['USE_SUMMARY_LENGTH'] = document.getElementById('USE_SUMMARY_LENGTH').checked ? 'true' : 'false';
 
-                // Get transcript provider settings
-                settingsToSave['TRANSCRIPT_PROVIDER'] = document.getElementById('TRANSCRIPT_PROVIDER').value;
+                // Get Supadata fallback settings
+                settingsToSave['ENABLE_SUPADATA_FALLBACK'] = document.getElementById('ENABLE_SUPADATA_FALLBACK').checked ? 'true' : 'false';
 
                 // Get Supadata API key if changed (don't save masked values)
                 const supadataKey = document.getElementById('SUPADATA_API_KEY').value.trim();
@@ -1531,10 +1922,7 @@ Transcript: {transcript}`;
                 }
 
                 // Hide unsaved indicator
-                const unsavedIndicator = document.getElementById('unsaved-ai-credentials');
-                if (unsavedIndicator) {
-                    unsavedIndicator.style.display = 'none';
-                }
+                hideUnsavedIndicator('ai-credentials');
 
             } catch (error) {
                 // Show error in button
@@ -1556,17 +1944,7 @@ Transcript: {transcript}`;
         trackableInputs.forEach(input => {
             const showIndicator = () => {
                 const section = input.getAttribute('data-section');
-                if (section === 'email') {
-                    document.getElementById('unsaved-email').style.display = 'inline';
-                } else if (section === 'video') {
-                    document.getElementById('unsaved-video').style.display = 'inline';
-                } else if (section === 'transcript') {
-                    document.getElementById('unsaved-transcript').style.display = 'inline';
-                } else if (section === 'ai-credentials') {
-                    document.getElementById('unsaved-ai-credentials').style.display = 'inline';
-                } else if (section === 'prompt') {
-                    document.getElementById('unsaved-prompt').style.display = 'inline';
-                }
+                showUnsavedIndicator(section);  // Use centralized utility function
             };
 
             // Track both input and change events (input for text fields, change for select/checkbox)
@@ -1574,18 +1952,38 @@ Transcript: {transcript}`;
             input.addEventListener('change', showIndicator);
         });
 
-        // Hide all unsaved indicators when settings are saved
-        const originalSaveAllSettings = saveAllSettings;
-        saveAllSettings = async function(buttonElement) {
-            await originalSaveAllSettings(buttonElement);
-            document.getElementById('unsaved-email').style.display = 'none';
-            document.getElementById('unsaved-video').style.display = 'none';
-            document.getElementById('unsaved-transcript').style.display = 'none';
-        };
-
         // ============================================================================
         // VIDEO FEED ENHANCEMENTS
         // ============================================================================
+
+        function getStatusLabel(status) {
+            const labels = {
+                'pending': '⏳ Waiting to start',
+                'fetching_metadata': '📊 Fetching video info',
+                'fetching_transcript': '📝 Fetching transcript',
+                'generating_summary': '🤖 Generating AI summary',
+                'sending_email': '📧 Sending email',
+                'processing': '⚙️ Processing video',
+                'success': '✅ Completed',
+                'failed_transcript': '❌ Transcript unavailable',
+                'failed_ai': '❌ AI generation failed',
+                'failed_email': '❌ Email delivery failed',
+                'failed_permanent': '❌ Failed after 3 retries',
+                'failed_stopped': '⏹️ Stopped by user'
+            };
+            return labels[status] || status;
+        }
+
+        function getStepIndicator(status) {
+            const steps = {
+                'pending': '1/4',
+                'fetching_metadata': '1/4',
+                'fetching_transcript': '2/4',
+                'generating_summary': '3/4',
+                'sending_email': '4/4'
+            };
+            return steps[status] || null;
+        }
 
         function renderVideoActions(video) {
             const status = video.processing_status;
@@ -1594,11 +1992,9 @@ Transcript: {transcript}`;
             let buttonsHtml = '<div class="video-buttons">';
 
             if (status === 'success') {
-                // Labels row
+                // Labels row - only show email label if email was actually sent
                 if (video.email_sent) {
-                    labelsHtml += `<span class="label-status label-email-sent" title="Email sent">Email</span>`;
-                } else {
-                    labelsHtml += `<span class="label-status label-email-pending" title="Email pending">Email</span>`;
+                    labelsHtml += `<span class="label-status label-email-sent" title="Email sent successfully">📧 Email sent</span>`;
                 }
 
                 // Buttons row
@@ -1606,18 +2002,29 @@ Transcript: {transcript}`;
                 buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
 
             } else if (status === 'pending') {
-                labelsHtml += `<span class="label-status label-pending">Pending</span>`;
-                // Show retry count if any
-                if (retryCount > 0) {
-                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+                labelsHtml += `<span class="label-status label-pending">${getStatusLabel('pending')}</span>`;
+                // Show step indicator
+                const stepIndicator = getStepIndicator(status);
+                if (stepIndicator) {
+                    labelsHtml += `<span class="label-status label-step">${stepIndicator}</span>`;
                 }
-                // Add Logs button for pending status too
+                // Show retry count only if it's actually a retry (> 1, not first attempt)
+                if (retryCount > 1) {
+                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">Retry ${retryCount}/3</span>`;
+                }
+                // Add Stop and Logs buttons for pending status
+                buttonsHtml += `<button class="btn-stop" onclick="stopProcessing('${escapeAttr(video.id)}')">Stop</button>`;
                 buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
-            } else if (status === 'processing') {
-                labelsHtml += `<span class="label-status label-processing">Processing</span>`;
-                // Show retry count if any
-                if (retryCount > 0) {
-                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+            } else if (status === 'processing' || status === 'fetching_metadata' || status === 'fetching_transcript' || status === 'generating_summary' || status === 'sending_email') {
+                labelsHtml += `<span class="label-status label-processing">${getStatusLabel(status)}</span>`;
+                // Show step indicator
+                const stepIndicator = getStepIndicator(status);
+                if (stepIndicator) {
+                    labelsHtml += `<span class="label-status label-step">${stepIndicator}</span>`;
+                }
+                // Show retry count only if it's actually a retry (> 1, not first attempt)
+                if (retryCount > 1) {
+                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">Retry ${retryCount}/3</span>`;
                 }
                 // Add Stop button for videos being processed
                 buttonsHtml += `<button class="btn-stop" onclick="stopProcessing('${escapeAttr(video.id)}')">Stop</button>`;
@@ -1652,14 +2059,19 @@ Transcript: {transcript}`;
 
                 // Labels row
                 labelsHtml += `<span class="label-status label-error" title="${escapeAttr(errorTitle)}">${errorType}</span>`;
-                // Show retry count if any
+                // Show retry count (different display for failed states)
                 if (retryCount > 0) {
-                    labelsHtml += `<span class="label-status label-warning" title="Retry attempt ${retryCount} of 3">${retryCount}/3</span>`;
+                    labelsHtml += `<span class="label-status label-warning" title="Failed after ${retryCount} attempts">Attempt ${retryCount}/3</span>`;
                 }
 
                 // Buttons row
                 buttonsHtml += `<button class="btn-retry" onclick="retryVideo('${escapeAttr(video.id)}')">Retry</button>`;
                 buttonsHtml += `<button class="btn-logs" onclick="showVideoLogs('${escapeAttr(video.id)}')">Logs</button>`;
+            }
+
+            // Add delete button for manually added videos (all statuses)
+            if (video.source_type === 'via_manual') {
+                buttonsHtml += `<button class="btn-delete" onclick="confirmDeleteVideo('${escapeAttr(video.id)}', '${escapeAttr(video.title)}')">Delete</button>`;
             }
 
             labelsHtml += '</div>';
@@ -1680,6 +2092,16 @@ Transcript: {transcript}`;
                 const status = data.status || '';
                 const lines = data.lines || [];
                 const message = data.message || '';
+
+                // Parse countdown from latest "Sleeping" log line
+                const sleepingMatch = lines.find(line => line.includes('Sleeping') && line.includes('s '));
+                if (sleepingMatch) {
+                    const countdownMatch = sleepingMatch.match(/Sleeping\s+([\d.]+)s/);
+                    if (countdownMatch) {
+                        const countdown = Math.ceil(parseFloat(countdownMatch[1]));
+                        updateVideoCountdown(currentLogsVideoId, countdown);
+                    }
+                }
 
                 // Update modal content
                 const statusEl = document.getElementById('logsStatus');
@@ -1913,6 +2335,49 @@ Transcript: {transcript}`;
             }
         }
 
+        function confirmDeleteVideo(videoId, videoTitle) {
+            // Show confirmation modal
+            const modal = document.getElementById('modal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalMessage = document.getElementById('modalMessage');
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+
+            modalTitle.textContent = 'Delete Video';
+            modalMessage.textContent = `Are you sure you want to permanently delete "${videoTitle}"? This action cannot be undone.`;
+            confirmBtn.textContent = 'Delete';
+            confirmBtn.onclick = () => deleteVideo(videoId);
+
+            modal.classList.add('show');
+        }
+
+        async function deleteVideo(videoId) {
+            closeModal();
+
+            try {
+                const response = await fetch(`/api/videos/${videoId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showStatus('Video deleted successfully', false);
+
+                    // Remove video element from DOM
+                    const videoElement = document.getElementById(`video-${videoId}`);
+                    if (videoElement) {
+                        videoElement.remove();
+                    }
+
+                    // Reload feed to update count
+                    setTimeout(() => loadVideoFeed(true, true), 500);
+                } else {
+                    throw new Error('Failed to delete video');
+                }
+            } catch (error) {
+                showStatus('Failed to delete video', true);
+                console.error(error);
+            }
+        }
+
         async function checkNow() {
             const btn = event.target;
             const originalText = btn.textContent;
@@ -1996,10 +2461,8 @@ Transcript: {transcript}`;
                     // Clear input
                     urlInput.value = '';
 
-                    // Reload feed to show the new video (it will be in "processing" state)
-                    setTimeout(() => {
-                        loadVideoFeed(true, true);
-                    }, 1000);
+                    // Reload feed immediately to show the new video (it will be in "pending" state)
+                    loadVideoFeed(true, true);
 
                     // Start periodic status updates if not already running
                     if (!feedRefreshInterval) {

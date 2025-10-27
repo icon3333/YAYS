@@ -53,12 +53,15 @@ class EmailSender:
         if video.get('upload_date'):
             metadata_lines.append(f"📅 Uploaded: {video['upload_date']}")
 
+        # Construct video URL from ID
+        video_url = video.get('url', f"https://youtube.com/watch?v={video['id']}")
+
         # Compose email body
         if metadata_lines:
             metadata_section = "\n".join(metadata_lines)
-            email_body = f"{metadata_section}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{summary}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎬 Watch video: {video['url']}"
+            email_body = f"{metadata_section}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{summary}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎬 Watch video: {video_url}"
         else:
-            email_body = f"{summary}\n\n---\n🎬 Watch video: {video['url']}"
+            email_body = f"{summary}\n\n---\n🎬 Watch video: {video_url}"
 
         msg = MIMEText(email_body, 'plain', 'utf-8')
         msg['Subject'] = f"YAYS: {video['title'][:60]}"

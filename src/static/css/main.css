@@ -53,6 +53,32 @@
             font-size: 18px;
             font-weight: 600;
             letter-spacing: 0.02em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* Header Logo */
+        .header-logo {
+            height: 24px;
+            width: auto;
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+        /* Iconoir Icons */
+        .iconoir,
+        [class*="iconoir-"] {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            vertical-align: -0.125em;
+            margin-right: 8px;
+        }
+
+        h3 .iconoir,
+        h3 [class*="iconoir-"] {
+            font-size: 16px;
         }
 
         /* Main Layout - Two Columns */
@@ -1117,12 +1143,19 @@
         .label-pending {
             color: var(--grey-600);
             background: var(--grey-100);
+            animation: pulse 2s ease-in-out infinite;
         }
 
         .label-processing {
             color: var(--grey-700);
             background: var(--grey-100);
             animation: pulse 2s ease-in-out infinite;
+        }
+
+        .label-step {
+            color: #0066cc;
+            background: #e3f2fd;
+            font-weight: 600;
         }
 
         .label-error {
@@ -1270,6 +1303,26 @@
         }
 
         .btn-stop:hover {
+            background: rgba(211, 47, 47, 0.05);
+            border-color: #b71c1c;
+            color: #b71c1c;
+        }
+
+        /* Delete button - red outline button for manual videos */
+        .btn-delete {
+            padding: 5px 12px;
+            background: transparent;
+            color: #d32f2f;
+            border: 1px solid #d32f2f;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-delete:hover {
             background: rgba(211, 47, 47, 0.05);
             border-color: #b71c1c;
             color: #b71c1c;

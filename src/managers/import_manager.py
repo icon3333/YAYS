@@ -219,7 +219,7 @@ class ImportManager:
             ImportPreview with counts of changes
         """
         # Get current state
-        existing_channels, _ = self.config_manager.get_channels()
+        existing_channels, _, _ = self.config_manager.get_channels()
         existing_settings = self.config_manager.get_settings()
 
         # Count channels
@@ -398,7 +398,7 @@ class ImportManager:
                             # Try config settings first
                             config_keys = {
                                 "SUMMARY_LENGTH", "USE_SUMMARY_LENGTH", "SKIP_SHORTS",
-                                "MAX_VIDEOS_PER_CHANNEL", "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
+                                "CHECK_INTERVAL_MINUTES", "MAX_FEED_ENTRIES"
                             }
                             config_settings = {k: v for k, v in non_empty_settings.items() if k in config_keys}
                             env_settings = {k: v for k, v in non_empty_settings.items() if k not in config_keys}
@@ -569,11 +569,6 @@ class ImportManager:
 
         if "SEND_EMAIL_SUMMARIES" in settings:
             validate_boolean_setting("SEND_EMAIL_SUMMARIES", settings["SEND_EMAIL_SUMMARIES"])
-
-        if "MAX_VIDEOS_PER_CHANNEL" in settings:
-            val = settings["MAX_VIDEOS_PER_CHANNEL"]
-            if not isinstance(val, int) or val <= 0:
-                errors.append("settings.MAX_VIDEOS_PER_CHANNEL must be a positive integer")
 
         if "ai_prompt_template" in settings:
             prompt = settings["ai_prompt_template"]

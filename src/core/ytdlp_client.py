@@ -398,6 +398,7 @@ class YTDLPClient:
                         'upload_date': upload_date,
                         'upload_date_string': upload_date_str,
                         'description': info.get('description', ''),
+                        'channel': info.get('channel') or info.get('uploader'),
                         'uploader': info.get('uploader'),
                         'channel_id': info.get('channel_id'),
                     }

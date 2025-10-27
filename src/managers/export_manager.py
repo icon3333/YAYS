@@ -300,7 +300,6 @@ class ExportManager:
                 "SUMMARY_LENGTH",
                 "USE_SUMMARY_LENGTH",
                 "SKIP_SHORTS",
-                "MAX_VIDEOS_PER_CHANNEL",
                 "CHECK_INTERVAL_MINUTES",
                 "MAX_FEED_ENTRIES",
             ]

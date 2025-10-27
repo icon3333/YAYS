@@ -82,7 +82,8 @@ class VideoDatabase:
             'error_message': row['error_message'],
             'email_sent': bool(row['email_sent']),
             'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel',
-            'retry_count': row['retry_count'] if 'retry_count' in row.keys() else 0
+            'retry_count': row['retry_count'] if 'retry_count' in row.keys() else 0,
+            'transcript_source': row['transcript_source'] if 'transcript_source' in row.keys() else None
         }
 
         if include_summary:
@@ -113,6 +114,7 @@ class VideoDatabase:
                     error_message TEXT,
                     email_sent BOOLEAN DEFAULT 0,
                     source_type TEXT DEFAULT 'via_channel',
+                    transcript_source TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -138,6 +140,7 @@ class VideoDatabase:
         # Run migrations to add new tables/columns to existing databases
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
+        self._migrate_add_transcript_source()
         self._ensure_settings_table()
         self._ensure_channels_table()
         self._ensure_transcript_cache_table()
@@ -183,6 +186,36 @@ class VideoDatabase:
             """)
 
             conn.commit()
+
+    def _migrate_add_transcript_source(self):
+        """
+        Migration: Add transcript_source column to existing databases
+
+        This migration safely adds the transcript_source column to track which
+        transcript fetching method was used for each video:
+        - 'youtube-transcript-api': Standard YouTube Transcript API
+        - 'yt-dlp': yt-dlp subtitle extraction
+        - 'timedtext': Direct YouTube timedtext API
+        - 'supadata': Supadata.ai API fallback
+        - NULL: Not yet fetched or failed to fetch
+
+        Backward compatible: Existing videos will have NULL transcript_source
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if transcript_source column already exists
+            cursor.execute("PRAGMA table_info(videos)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'transcript_source' not in columns:
+                # Add the column (NULL by default for backward compatibility)
+                cursor.execute("""
+                    ALTER TABLE videos
+                    ADD COLUMN transcript_source TEXT
+                """)
+
+                conn.commit()
 
     def _ensure_settings_table(self):
         """
@@ -269,9 +302,10 @@ class VideoDatabase:
                     ('SUMMARY_LENGTH', '500', 'integer', 0, 'Maximum length of summary in tokens'),
                     ('USE_SUMMARY_LENGTH', 'false', 'enum', 0, 'Use summary length limit'),
                     ('SKIP_SHORTS', 'true', 'enum', 0, 'Skip YouTube Shorts videos'),
-                    ('MAX_VIDEOS_PER_CHANNEL', '5', 'integer', 0, 'Maximum videos to check per channel'),
                     ('CHECK_INTERVAL_MINUTES', '60', 'integer', 0, 'How often to check for new videos (minutes)'),
-                    ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process')
+                    ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process'),
+                    ('ENABLE_SUPADATA_FALLBACK', 'false', 'enum', 0, 'Enable Supadata.ai as fallback method (paid)'),
+                    ('SUPADATA_API_KEY', '', 'secret', 1, 'Supadata.ai API key (encrypted)')
             """)
 
             conn.commit()
@@ -318,7 +352,8 @@ class VideoDatabase:
         processing_status: str = 'pending',
         error_message: Optional[str] = None,
         email_sent: bool = False,
-        source_type: str = 'via_channel'
+        source_type: str = 'via_channel',
+        transcript_source: Optional[str] = None
     ) -> bool:
         """
         Add a video to the database
@@ -337,6 +372,7 @@ class VideoDatabase:
             error_message: Error message if processing failed
             email_sent: Whether summary email was sent successfully
             source_type: How video was added ('via_channel' or 'via_manual')
+            transcript_source: Which tool fetched the transcript (e.g., 'youtube-transcript-api', 'yt-dlp', 'timedtext', 'supadata')
 
         Returns:
             True if video was added successfully, False if already exists
@@ -344,17 +380,21 @@ class VideoDatabase:
         if self.is_processed(video_id):
             return False
 
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO videos
-                (id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
-                 summary_length, summary_text, processing_status, error_message, email_sent, source_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (video_id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
-                  summary_length, summary_text, processing_status, error_message, int(email_sent), source_type))
-
-        return True
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO videos
+                    (id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
+                     summary_length, summary_text, processing_status, error_message, email_sent, source_type, transcript_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (video_id, channel_id, channel_name, title, duration_seconds, view_count, upload_date,
+                      summary_length, summary_text, processing_status, error_message, int(email_sent), source_type, transcript_source))
+            return True
+        except sqlite3.IntegrityError:
+            # Video already exists (race condition between is_processed check and insert)
+            # This is safe to ignore - the database PRIMARY KEY constraint prevents duplicates
+            return False
 
     def get_channel_stats(self, channel_id: str) -> Dict:
         """
@@ -455,7 +495,8 @@ class VideoDatabase:
                     error_message,
                     email_sent,
                     source_type,
-                    retry_count
+                    retry_count,
+                    transcript_source
                 FROM videos
             """
 
@@ -583,7 +624,8 @@ class VideoDatabase:
         error_message: Optional[str] = None,
         email_sent: Optional[bool] = None,
         summary_length: Optional[int] = None,
-        retry_count: Optional[int] = None
+        retry_count: Optional[int] = None,
+        transcript_source: Optional[str] = None
     ):
         """
         Update video processing status and summary
@@ -616,6 +658,66 @@ class VideoDatabase:
                 updates.append('retry_count = ?')
                 params.append(retry_count)
 
+            if transcript_source is not None:
+                updates.append('transcript_source = ?')
+                params.append(transcript_source)
+
+            params.append(video_id)
+
+            cursor.execute(f"""
+                UPDATE videos
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+
+    def update_video_metadata(
+        self,
+        video_id: str,
+        title: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        channel_name: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+        view_count: Optional[int] = None,
+        upload_date: Optional[str] = None
+    ):
+        """
+        Update video metadata fields
+        Used by processor after fetching metadata for manually added videos
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build update query dynamically based on provided fields
+            updates = []
+            params = []
+
+            if title is not None:
+                updates.append('title = ?')
+                params.append(title)
+
+            if channel_id is not None:
+                updates.append('channel_id = ?')
+                params.append(channel_id)
+
+            if channel_name is not None:
+                updates.append('channel_name = ?')
+                params.append(channel_name)
+
+            if duration_seconds is not None:
+                updates.append('duration_seconds = ?')
+                params.append(duration_seconds)
+
+            if view_count is not None:
+                updates.append('view_count = ?')
+                params.append(view_count)
+
+            if upload_date is not None:
+                updates.append('upload_date = ?')
+                params.append(upload_date)
+
+            if not updates:
+                return  # Nothing to update
+
             params.append(video_id)
 
             cursor.execute(f"""
@@ -637,6 +739,24 @@ class VideoDatabase:
                 return None
 
             return self._video_row_to_dict(row, include_summary=True)
+
+    def delete_video(self, video_id: str) -> bool:
+        """
+        Delete a video from the database
+        Returns True if video was deleted, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if video exists
+            cursor.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,))
+            if not cursor.fetchone():
+                return False
+
+            # Delete the video
+            cursor.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+            conn.commit()
+            return True
 
     def get_transcript_cache(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve cached transcript status for a video if available."""
@@ -775,6 +895,8 @@ class VideoDatabase:
                     email_sent,
                     processed_date,
                     error_message,
+                    source_type,
+                    transcript_source,
                     created_at,
                     created_at as updated_at
                 FROM videos
@@ -797,6 +919,8 @@ class VideoDatabase:
                     'email_sent': bool(row['email_sent']),
                     'processed_date': row['processed_date'],
                     'error_message': row['error_message'],
+                    'source_type': row['source_type'] if 'source_type' in row.keys() else 'via_channel',
+                    'transcript_source': row['transcript_source'] if 'transcript_source' in row.keys() else None,
                     'created_at': row['created_at'],
                     'updated_at': row['updated_at']
                 })
@@ -839,8 +963,8 @@ class VideoDatabase:
                         INSERT INTO videos
                         (id, channel_id, channel_name, title, duration_seconds, view_count,
                          upload_date, summary_length, summary_text, processing_status,
-                         error_message, email_sent, source_type, processed_date, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         error_message, email_sent, source_type, transcript_source, processed_date, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         video_id,
                         video.get('channel_id', ''),
@@ -855,6 +979,7 @@ class VideoDatabase:
                         video.get('error_message'),
                         int(video.get('email_sent', False)),
                         video.get('source_type', 'via_channel'),
+                        video.get('transcript_source'),
                         video.get('processed_date'),
                         video.get('created_at', datetime.now().isoformat())
                     ))
@@ -1060,17 +1185,20 @@ class VideoDatabase:
 
             return channels
 
-    def get_enabled_channels(self) -> Tuple[List[str], Dict[str, str]]:
+    def get_enabled_channels(self) -> Tuple[List[str], Dict[str, str], Dict[str, Optional[str]]]:
         """
         Get enabled channels in format compatible with ConfigManager.
 
         Returns:
-            Tuple of (channel_ids list, channel_names dict)
+            Tuple of (channel_ids list, channel_names dict, channel_added_dates dict)
+            - channel_ids: List of enabled channel IDs
+            - channel_names: Dict mapping channel_id to display name
+            - channel_added_dates: Dict mapping channel_id to added_at timestamp (YYYY-MM-DD HH:MM:SS)
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT channel_id, channel_name
+                SELECT channel_id, channel_name, added_at
                 FROM channels
                 WHERE enabled = 1
                 ORDER BY channel_name
@@ -1078,14 +1206,17 @@ class VideoDatabase:
 
             channel_ids = []
             channel_names = {}
+            channel_added_dates = {}
 
             for row in cursor.fetchall():
                 channel_id = row[0]
                 channel_name = row[1]
+                added_at = row[2]
                 channel_ids.append(channel_id)
                 channel_names[channel_id] = channel_name
+                channel_added_dates[channel_id] = added_at
 
-            return channel_ids, channel_names
+            return channel_ids, channel_names, channel_added_dates
 
     def add_channel(self, channel_id: str, channel_name: str = None) -> bool:
         """

@@ -28,7 +28,8 @@ class AISummarizer:
         self.api_key = api_key
         self.model = model or os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
         try:
-            self.client = openai.OpenAI(api_key=api_key)
+            # Set timeout to 120 seconds (2 minutes) for API calls
+            self.client = openai.OpenAI(api_key=api_key, timeout=120.0)
             logger.info(f"OpenAI API client initialized with model: {self.model}")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {e}")
@@ -91,10 +92,12 @@ class AISummarizer:
                 if max_tokens is not None:
                     api_params["max_tokens"] = max_tokens
 
+                logger.debug(f"Calling OpenAI API (attempt {attempt + 1}/{self.RETRY_ATTEMPTS})...")
                 response = self.client.chat.completions.create(**api_params)
+                logger.debug(f"Received response from OpenAI API")
 
                 summary = response.choices[0].message.content
-                logger.debug(f"API call successful (attempt {attempt + 1})")
+                logger.info(f"✓ Summary generated: {len(summary)} chars (attempt {attempt + 1})")
                 return summary
 
             except openai.RateLimitError as e:
@@ -121,8 +124,18 @@ class AISummarizer:
                     logger.error("Max retries reached for API error")
                     return None
 
+            except openai.APITimeoutError as e:
+                logger.error(f"API timeout (attempt {attempt + 1}/{self.RETRY_ATTEMPTS}): {e}")
+                if attempt < self.RETRY_ATTEMPTS - 1:
+                    delay = self.RETRY_DELAY_BASE * (2 ** attempt)
+                    logger.info(f"Retrying in {delay}s...")
+                    sleep(delay)
+                else:
+                    logger.error("Max retries reached for timeout")
+                    return None
+
             except Exception as e:
-                logger.error(f"Unexpected error during API call: {e}")
+                logger.error(f"Unexpected error during API call: {e}", exc_info=True)
                 return None
 
         return None

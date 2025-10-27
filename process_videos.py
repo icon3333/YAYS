@@ -9,7 +9,7 @@ import sys
 import logging
 from datetime import datetime, timedelta
 from time import sleep, time
-from typing import Dict, List
+from typing import Dict, List, Optional
 from pathlib import Path
 
 # Import core modules
@@ -19,6 +19,8 @@ from src.core.ai_summarizer import AISummarizer
 from src.core.email_sender import EmailSender
 from src.core.constants import (
     STATUS_PENDING, STATUS_PROCESSING, STATUS_SUCCESS,
+    STATUS_FETCHING_METADATA, STATUS_FETCHING_TRANSCRIPT, STATUS_GENERATING_SUMMARY,
+    STATUS_SENDING_EMAIL,
     STATUS_FAILED_TRANSCRIPT, STATUS_FAILED_AI, STATUS_FAILED_EMAIL,
     RATE_LIMIT_DELAY
 )
@@ -86,6 +88,13 @@ class VideoProcessor:
     def __init__(self):
         """Initialize with config, credentials, and logging"""
         self.logger = setup_logging()
+
+        # Check for concurrent runs using PID lock
+        self.pid_lock_file = Path('data/.processor.pid')
+        if not self._acquire_lock():
+            self.logger.info("Another processor instance is already running. Exiting.")
+            sys.exit(0)
+
         self.logger.info("="*60)
         self.logger.info("YouTube Summarizer v2.0 Initializing")
         self.logger.info("="*60)
@@ -96,7 +105,7 @@ class VideoProcessor:
         self.settings_manager = SettingsManager(db_path='data/videos.db')
 
         # Load configuration from database
-        channels, channel_names = self.config_manager.get_channels()
+        channels, channel_names, channel_added_dates = self.config_manager.get_channels()
         self.logger.info(f"Loaded config: {len(channels)} channels")
 
         # Get settings from database
@@ -136,16 +145,19 @@ class VideoProcessor:
 
         self.youtube_client = YouTubeClient(use_ytdlp=use_ytdlp)
 
-        # Configure transcript extractor based on provider setting
-        transcript_provider = all_settings.get('TRANSCRIPT_PROVIDER', {}).get('value', 'legacy')
+        # Configure transcript extractor with Supadata fallback if enabled
+        enable_supadata_fallback = all_settings.get('ENABLE_SUPADATA_FALLBACK', {}).get('value', 'false') == 'true'
         supadata_api_key = all_settings.get('SUPADATA_API_KEY', {}).get('value', '')
 
-        # Log the provider being used
-        self.logger.info(f"Using transcript provider: {transcript_provider}")
+        # Log the cascade configuration
+        if enable_supadata_fallback and supadata_api_key:
+            self.logger.info("Using 4-method cascade with Supadata.ai fallback enabled")
+        else:
+            self.logger.info("Using 3-method cascade (Supadata.ai fallback disabled)")
 
         self.transcript_extractor = TranscriptExtractor(
-            provider=transcript_provider,
-            supadata_api_key=supadata_api_key if transcript_provider == 'supadata' else None,
+            provider='legacy',  # Always use cascade starting with legacy
+            supadata_api_key=supadata_api_key if enable_supadata_fallback else None,
             cache=self.db
         )
 
@@ -157,6 +169,7 @@ class VideoProcessor:
         # Store channels and settings for later use
         self.channels = channels
         self.channel_names = channel_names
+        self.channel_added_dates = channel_added_dates
         self.config_settings = config_settings
         self.send_email = all_settings.get('SEND_EMAIL_SUMMARIES', {}).get('value', 'true').lower() == 'true'
 
@@ -201,6 +214,98 @@ class VideoProcessor:
         except Exception:
             return False
 
+    def _acquire_lock(self) -> bool:
+        """
+        Acquire PID-based lock to prevent concurrent runs.
+        Returns True if lock acquired, False if another instance is running.
+        """
+        try:
+            self.pid_lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check if lock file exists
+            if self.pid_lock_file.exists():
+                try:
+                    old_pid = int(self.pid_lock_file.read_text().strip())
+
+                    # Check if process with this PID is still running
+                    import psutil
+                    if psutil.pid_exists(old_pid):
+                        try:
+                            proc = psutil.Process(old_pid)
+                            # Check if it's actually a Python process running our script
+                            if 'python' in proc.name().lower():
+                                return False  # Another instance is running
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+
+                    # Stale lock file, remove it
+                    self.pid_lock_file.unlink()
+                except (ValueError, FileNotFoundError):
+                    # Invalid lock file, remove it
+                    try:
+                        self.pid_lock_file.unlink()
+                    except FileNotFoundError:
+                        pass
+
+            # Write our PID to lock file
+            import os
+            self.pid_lock_file.write_text(str(os.getpid()))
+            return True
+
+        except Exception as e:
+            # If we can't acquire lock due to error, assume another instance is running
+            self.logger.warning(f"Error acquiring lock: {e}")
+            return False
+
+    def _release_lock(self):
+        """Release the PID lock file"""
+        try:
+            if self.pid_lock_file.exists():
+                self.pid_lock_file.unlink()
+        except Exception as e:
+            self.logger.warning(f"Error releasing lock: {e}")
+
+    def _should_process_video(self, video_upload_date: Optional[str], channel_added_at: Optional[str]) -> bool:
+        """
+        Determine if a video should be processed based on upload date vs channel added date.
+
+        Args:
+            video_upload_date: Video upload date in YYYY-MM-DD or YYYYMMDD format
+            channel_added_at: Channel added timestamp in YYYY-MM-DD HH:MM:SS format
+
+        Returns:
+            True if video should be processed, False if it should be skipped
+        """
+        # If channel has no added_at (old channels), process all videos (backward compatibility)
+        if not channel_added_at:
+            return True
+
+        # If video has no upload date, process it (can't determine if old/new)
+        if not video_upload_date:
+            return True
+
+        try:
+            # Parse channel added date (format: YYYY-MM-DD HH:MM:SS)
+            # Extract just the date part for comparison
+            channel_date_str = channel_added_at.split()[0]  # Get YYYY-MM-DD part
+            channel_date = datetime.strptime(channel_date_str, '%Y-%m-%d').date()
+
+            # Parse video upload date (could be YYYY-MM-DD or YYYYMMDD)
+            if len(video_upload_date) == 8 and '-' not in video_upload_date:
+                # Format: YYYYMMDD
+                video_date = datetime.strptime(video_upload_date, '%Y%m%d').date()
+            else:
+                # Format: YYYY-MM-DD
+                video_date = datetime.strptime(video_upload_date, '%Y-%m-%d').date()
+
+            # Process video only if uploaded on or after channel was added
+            return video_date >= channel_date
+
+        except (ValueError, AttributeError, IndexError) as e:
+            # If date parsing fails, process the video (fail-safe)
+            self.logger.warning(f"Error parsing dates for filtering (will process video): {e}")
+            return True
+
     def cleanup_stuck_videos(self):
         """
         Smart detection and cleanup of stuck videos using hybrid approach:
@@ -209,13 +314,19 @@ class VideoProcessor:
         3. Absolute timeout: 10+ minutes regardless
         """
         try:
-            # Get all videos currently in processing state
+            # Get all videos currently in any processing state
             with self.db._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id, title, processed_date, retry_count
                     FROM videos
-                    WHERE processing_status = 'processing'
+                    WHERE processing_status IN (
+                        'processing',
+                        'fetching_metadata',
+                        'fetching_transcript',
+                        'generating_summary',
+                        'sending_email'
+                    )
                 """)
                 processing_videos = cursor.fetchall()
 
@@ -298,51 +409,13 @@ class VideoProcessor:
         # Update heartbeat to show we're actively processing
         self._update_heartbeat()
 
-        # Get enhanced metadata (if using yt-dlp)
-        metadata = self.youtube_client.get_video_metadata(video['id'])
-        if metadata:
-            duration_seconds = metadata.get('duration', 0)
-            view_count = metadata.get('view_count', 0)
-            upload_date = metadata.get('upload_date_string', '')
-            duration_str = metadata.get('duration_string', 'Unknown')
-
-            self.logger.debug(f"      Metadata: {duration_str}, {metadata.get('view_count_string', 'Unknown views')}")
-
-            # Update video dict with metadata
-            video['duration_seconds'] = duration_seconds
-            video['view_count'] = view_count
-            video['upload_date'] = upload_date
-            video['duration_string'] = duration_str
-        else:
-            # No metadata available (RSS fallback)
-            video['duration_seconds'] = None
-            video['view_count'] = None
-            video['upload_date'] = None
-            video['duration_string'] = 'Unknown'
-
-        # Check if video already exists in database
-        if self.db.is_processed(video['id']):
-            existing = self.db.get_video_by_id(video['id'])
-
-            # Check retry limit (max 3 attempts)
-            retry_count = existing.get('retry_count', 0)
-            if retry_count >= 3 and existing.get('processing_status') != STATUS_SUCCESS:
-                self.logger.info(f"      Skipping after {retry_count} failed attempts")
-                return False
-
-            # Skip if already successfully processed
-            if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
-                if existing.get('processing_status') != 'failed_permanent':
-                    self.logger.debug(f"      Already processed: {existing.get('processing_status')}")
-                return False
-
-        # Mark as processing and increment retry count
+        # Mark as processing and set initial status
         if self.db.is_processed(video['id']):
             existing = self.db.get_video_by_id(video['id'])
             current_retry = existing.get('retry_count', 0)
             self.db.update_video_processing(
                 video['id'],
-                STATUS_PROCESSING,
+                STATUS_FETCHING_METADATA,
                 retry_count=current_retry + 1
             )
         else:
@@ -351,16 +424,53 @@ class VideoProcessor:
                 channel_id=channel_id,
                 channel_name=channel_name,
                 title=video['title'],
-                duration_seconds=video.get('duration_seconds'),
-                view_count=video.get('view_count'),
-                upload_date=video.get('upload_date'),
-                processing_status=STATUS_PROCESSING
+                processing_status=STATUS_FETCHING_METADATA
             )
 
-        # STEP 1: Extract transcript
-        self.logger.debug(f"      Fetching transcript for {video['id']}")
+        # STEP 1: Get enhanced metadata (if using yt-dlp)
+        self.logger.info(f"      📊 Fetching metadata...")
+        metadata = self.youtube_client.get_video_metadata(video['id'])
+        if metadata:
+            duration_seconds = metadata.get('duration', 0)
+            view_count = metadata.get('view_count', 0)
+            upload_date = metadata.get('upload_date_string', '')
+            duration_str = metadata.get('duration_string', 'Unknown')
+            title = metadata.get('title', video.get('title', f"Video {video['id']}"))
+            metadata_channel_id = metadata.get('channel_id', channel_id)
+            # Try 'channel' first, then 'uploader' as fallback for robustness
+            metadata_channel_name = metadata.get('channel') or metadata.get('uploader') or channel_name
+
+            self.logger.debug(f"      Metadata: {duration_str}, {metadata.get('view_count_string', 'Unknown views')}")
+
+            # Update video dict with metadata
+            video['duration_seconds'] = duration_seconds
+            video['view_count'] = view_count
+            video['upload_date'] = upload_date
+            video['duration_string'] = duration_str
+            video['title'] = title
+
+            # Update database with fetched metadata (important for manually added videos)
+            self.db.update_video_metadata(
+                video_id=video['id'],
+                title=title,
+                channel_id=metadata_channel_id,
+                channel_name=metadata_channel_name,
+                duration_seconds=duration_seconds,
+                view_count=view_count,
+                upload_date=upload_date
+            )
+        else:
+            # No metadata available (RSS fallback)
+            video['duration_seconds'] = None
+            video['view_count'] = None
+            video['upload_date'] = None
+            video['duration_string'] = 'Unknown'
+
+        # STEP 2: Extract transcript using cascade
+        self.db.update_video_processing(video['id'], STATUS_FETCHING_TRANSCRIPT)
+        self.logger.info(f"      📝 Fetching transcript...")
         self._update_heartbeat()  # Keep heartbeat alive
-        transcript, duration = self.transcript_extractor.get_transcript(video['id'])
+        transcript, duration, transcript_source = self.transcript_extractor.get_transcript_cascade(video['id'])
         if not transcript:
             self.logger.info(f"      ❌ No transcript available")
             self.db.update_video_processing(
@@ -375,7 +485,9 @@ class VideoProcessor:
         if not video.get('duration_string') or video['duration_string'] == 'Unknown':
             video['duration_string'] = duration or 'Unknown'
 
-        # STEP 2: Generate AI summary
+        # STEP 3: Generate AI summary
+        self.db.update_video_processing(video['id'], STATUS_GENERATING_SUMMARY)
+        self.logger.info(f"      🤖 Generating AI summary...")
         use_summary_length = self.config_settings.get('USE_SUMMARY_LENGTH', 'false') == 'true'
         max_tokens = int(self.config_settings.get('SUMMARY_LENGTH', '500')) if use_summary_length else None
         prompt_template = self.config_manager.get_prompt()
@@ -401,21 +513,28 @@ class VideoProcessor:
 
         self.stats['api_calls'] += 1
 
-        # STEP 3: Save summary to database
+        # STEP 4: Save summary to database (but not final yet - may need to send email)
         self.db.update_video_processing(
             video['id'],
             status=STATUS_SUCCESS,
             summary_text=summary,
-            summary_length=len(summary)
+            summary_length=len(summary),
+            transcript_source=transcript_source
         )
         self.logger.info(f"      ✅ Summary generated ({len(summary)} chars)")
 
-        # STEP 4: Optionally send email
+        # STEP 5: Optionally send email
         if self.send_email:
+            # Update status to show we're sending email
+            self.db.update_video_processing(video['id'], STATUS_SENDING_EMAIL)
+            self.logger.info(f"      📧 Sending email...")
+            self._update_heartbeat()  # Keep heartbeat alive
+
             if self.email_sender.send_email(video, summary, channel_name):
+                # Email sent successfully - mark as final success
                 self.db.update_video_processing(video['id'], status=STATUS_SUCCESS, email_sent=True)
                 self.stats['email_sent'] += 1
-                self.logger.info(f"      📧 Email sent")
+                self.logger.info(f"      ✅ Email sent successfully")
             else:
                 # Email failed but summary is saved - mark as failed_email
                 self.db.update_video_processing(
@@ -425,9 +544,11 @@ class VideoProcessor:
                     email_sent=False
                 )
                 self.stats['email_failed'] += 1
-                self.logger.warning(f"      ⚠️  Email failed (summary saved)")
+                self.logger.warning(f"      ❌ Email failed (summary saved)")
         else:
+            # Email disabled - mark as success since summary is saved
             self.logger.info(f"      📝 Email disabled (summary saved only)")
+            self.db.update_video_processing(video['id'], status=STATUS_SUCCESS, email_sent=False)
 
         # Statistics
         self.stats['videos_processed'] += 1
@@ -447,51 +568,59 @@ class VideoProcessor:
         self.logger.info("🔍 Checking for stuck videos...")
         self.cleanup_stuck_videos()
 
-        if not self.channels:
-            self.logger.warning("No channels configured!")
-            self.logger.warning("Add channels using the web UI")
-            return
-
-        # Get settings
-        max_videos = int(self.config_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))
-        skip_shorts = self.config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
-
         # STEP 1: Process any pending videos from database (retries, manual adds, etc.)
+        # This must come BEFORE the channels check so manually added videos are processed
         pending_videos = self.db.get_pending_videos()
         if pending_videos:
             self.logger.info(f"🔄 Processing {len(pending_videos)} pending videos from database")
             for video in pending_videos:
                 channel_id = video.get('channel_id', 'unknown')
                 channel_name = video.get('channel_name', 'Unknown')
-                self.logger.info(f"   ▶️  {video['title'][:50]}...")
+                # process_video() will log the video title
                 self.process_video(video, channel_id, channel_name)
 
-        # STEP 2: Process each channel for new videos
-        for channel_id in self.channels:
-            channel_name = self.channel_names.get(channel_id, channel_id)
-            self.logger.info(f"📡 Checking: {channel_name}")
+        # STEP 2: Process each channel for new videos (skip if no channels)
+        if not self.channels:
+            self.logger.warning("No channels configured for automatic checking")
+            self.logger.warning("Add channels using the web UI for automatic video discovery")
+            # Don't return here - we may have processed pending videos above
+        else:
+            # Get settings
+            skip_shorts = self.config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
-            videos = self.youtube_client.get_channel_videos(
-                channel_id=channel_id,
-                max_videos=max_videos,
-                skip_shorts=skip_shorts
-            )
+            # Process each channel
+            for channel_id in self.channels:
+                channel_name = self.channel_names.get(channel_id, channel_id)
+                channel_added_at = self.channel_added_dates.get(channel_id)
+                self.logger.info(f"📡 Checking: {channel_name}")
 
-            if not videos:
-                self.logger.info(f"   📭 No new videos")
-                continue
+                videos = self.youtube_client.get_channel_videos(
+                    channel_id=channel_id,
+                    max_videos=20,  # Check last 20 videos for new uploads
+                    skip_shorts=skip_shorts
+                )
 
-            # Process each video
-            for video in videos:
-                # Check database status - only process if pending or not in DB
-                if self.db.is_processed(video['id']):
-                    existing = self.db.get_video_by_id(video['id'])
-                    if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
-                        self.logger.debug(f"   Skipping {existing.get('processing_status')}: {video['title'][:40]}")
+                if not videos:
+                    self.logger.info(f"   📭 No new videos")
+                    continue
+
+                # Process each video
+                for video in videos:
+                    # Check if video was uploaded before channel was added (skip old videos)
+                    video_upload_date = video.get('published') or video.get('upload_date')
+                    if not self._should_process_video(video_upload_date, channel_added_at):
+                        self.logger.debug(f"   ⏭️  Skipping old video (uploaded before channel was added): {video['title'][:50]}")
                         continue
 
-                # Process the video
-                self.process_video(video, channel_id, channel_name)
+                    # Check database status - only process if pending or not in DB
+                    if self.db.is_processed(video['id']):
+                        existing = self.db.get_video_by_id(video['id'])
+                        if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
+                            self.logger.debug(f"   Skipping {existing.get('processing_status')}: {video['title'][:40]}")
+                            continue
+
+                    # Process the video
+                    self.process_video(video, channel_id, channel_name)
 
         # Print summary
         self.logger.info("")
@@ -517,18 +646,26 @@ class VideoProcessor:
         self.logger.info("="*60)
         self.logger.info("")
 
+        # Release lock after processing
+        self._release_lock()
+
 
 def main():
     """Entry point with error handling"""
+    processor = None
     try:
         processor = VideoProcessor()
         processor.run()
     except KeyboardInterrupt:
         print("\n\n👋 Stopped by user")
+        if processor:
+            processor._release_lock()
         sys.exit(0)
     except Exception as e:
         logger = logging.getLogger('summarizer')
         logger.critical(f"Fatal error: {e}", exc_info=True)
+        if processor:
+            processor._release_lock()
         sys.exit(1)
 
 

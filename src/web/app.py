@@ -188,7 +188,7 @@ async def home(request: Request):
 async def get_channels():
     """API endpoint to retrieve current channels"""
     try:
-        channels, names = config_manager.get_channels()
+        channels, names, _ = config_manager.get_channels()
         logger.info(f"Loaded {len(channels)} channels")
         return {"channels": channels, "names": names}
     except Exception as e:
@@ -222,13 +222,13 @@ async def fetch_initial_videos(channel_id: str):
     try:
         # Get settings
         config_settings = config_manager.get_settings()
-        max_videos = int(config_settings.get('MAX_VIDEOS_PER_CHANNEL', '5'))
         skip_shorts = config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
 
-        logger.info(f"Fetching and processing last {max_videos} videos for new channel: {channel_id}")
+        # Don't backfill old videos when adding new channels
+        logger.info(f"Adding new channel without backfilling old videos: {channel_id}")
 
         # Fetch videos using YouTubeClient (yt-dlp with RSS fallback)
-        videos = youtube_client.get_channel_videos(channel_id, max_videos, skip_shorts)
+        videos = youtube_client.get_channel_videos(channel_id, max_videos=0, skip_shorts=skip_shorts)
 
         if not videos:
             logger.warning(f"Could not fetch videos for channel: {channel_id}")
@@ -303,6 +303,39 @@ async def health_check():
             status_code=503,
             content={"status": "unhealthy", "error": str(e)}
         )
+
+
+@app.get("/api/ytdlp/timing")
+async def get_ytdlp_timing():
+    """
+    Get yt-dlp timing configuration for frontend countdown timers
+    Returns estimated wait times for various operations
+    """
+    try:
+        return {
+            "sleep_requests": ytdlp_client.sleep_requests,
+            "sleep_interval": ytdlp_client.sleep_interval,
+            "max_sleep_interval": ytdlp_client.max_sleep_interval,
+            "retry_delay_base": ytdlp_client.retry_delay_base,
+            "max_retries": ytdlp_client.max_retries,
+            # Estimated times for different operations (in seconds)
+            "estimated_channel_fetch": ytdlp_client.sleep_requests + ytdlp_client.sleep_interval + 2,
+            "estimated_video_fetch": ytdlp_client.sleep_requests + ytdlp_client.sleep_interval + 3,
+            "estimated_metadata_fetch": ytdlp_client.sleep_requests + ytdlp_client.sleep_interval + 1
+        }
+    except Exception as e:
+        logger.error(f"Error getting yt-dlp timing: {e}")
+        # Return safe defaults
+        return {
+            "sleep_requests": 0,
+            "sleep_interval": 0,
+            "max_sleep_interval": 0,
+            "retry_delay_base": 10,
+            "max_retries": 3,
+            "estimated_channel_fetch": 5,
+            "estimated_video_fetch": 8,
+            "estimated_metadata_fetch": 3
+        }
 
 
 @app.get("/api/fetch-channel-name/{channel_input:path}")
@@ -428,7 +461,7 @@ async def update_settings(data: MultipleSettingsUpdate):
         for key, value in data.settings.items():
             if key in settings_manager.env_schema:
                 env_updates[key] = value
-            elif key in ['SUMMARY_LENGTH', 'USE_SUMMARY_LENGTH', 'SKIP_SHORTS', 'MAX_VIDEOS_PER_CHANNEL']:
+            elif key in ['SUMMARY_LENGTH', 'USE_SUMMARY_LENGTH', 'SKIP_SHORTS']:
                 config_updates[key] = value
 
         results = {"env": None, "config": None, "restart_required": False}
@@ -456,12 +489,6 @@ async def update_settings(data: MultipleSettingsUpdate):
                         validation_errors.append(f"SUMMARY_LENGTH must be a number")
                     elif value and (int(value) < 100 or int(value) > 10000):
                         validation_errors.append(f"SUMMARY_LENGTH must be between 100 and 10000")
-
-                elif key == 'MAX_VIDEOS_PER_CHANNEL':
-                    if value and not value.isdigit():
-                        validation_errors.append(f"MAX_VIDEOS_PER_CHANNEL must be a number")
-                    elif value and (int(value) < 1 or int(value) > 50):
-                        validation_errors.append(f"MAX_VIDEOS_PER_CHANNEL must be between 1 and 50")
 
                 elif key in ['USE_SUMMARY_LENGTH', 'SKIP_SHORTS']:
                     if value and value not in ['true', 'false']:
@@ -925,7 +952,7 @@ async def reset_youtube_data():
         logger.info("Resetting YouTube data (channels + feed)")
 
         # Get current counts before deletion
-        channels, _ = config_manager.get_channels()
+        channels, _, _ = config_manager.get_channels()
         channel_count = len(channels)
 
         # Delete all videos from database
@@ -981,7 +1008,7 @@ async def reset_complete_app():
         logger.info("Resetting complete application")
 
         # Get current counts before deletion
-        channels, _ = config_manager.get_channels()
+        channels, _, _ = config_manager.get_channels()
         channel_count = len(channels)
 
         # Delete all videos from database
@@ -1285,11 +1312,14 @@ async def stop_video_processing(video_id: str):
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
 
-        # Only stop if currently processing
-        if video.get('processing_status') != 'processing':
+        # Only stop if currently pending or processing
+        current_status = video.get('processing_status')
+        stoppable_statuses = ['pending', 'processing', 'fetching_metadata', 'fetching_transcript', 'generating_summary']
+
+        if current_status not in stoppable_statuses:
             return {
                 "status": "info",
-                "message": "Video is not currently processing"
+                "message": f"Video cannot be stopped (current status: {current_status})"
             }
 
         # Mark as stopped
@@ -1298,7 +1328,7 @@ async def stop_video_processing(video_id: str):
             status='failed_stopped',
             error_message='Processing stopped by user'
         )
-        logger.info(f"Stopped processing for video {video_id}")
+        logger.info(f"Stopped processing for video {video_id} (was: {current_status})")
 
         return {
             "status": "success",
@@ -1348,6 +1378,36 @@ async def force_retry_video(video_id: str):
         raise
     except Exception as e:
         logger.error(f"Error force retrying video {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/videos/{video_id}")
+async def delete_video(video_id: str):
+    """
+    Delete a video from the database (typically used for manually added videos)
+    """
+    try:
+        # Check if video exists
+        video = video_db.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Delete the video
+        success = video_db.delete_video(video_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete video")
+
+        logger.info(f"Deleted video {video_id}: {video.get('title', 'Unknown')}")
+
+        return {
+            "status": "success",
+            "message": "Video deleted successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting video {video_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1441,58 +1501,27 @@ async def add_single_video(data: SingleVideoAdd):
                 detail="Video already processed. Check your feed for the existing summary."
             )
 
-        # Get video metadata using ytdlp_client
-        metadata = ytdlp_client.get_video_metadata(video_id)
-
-        if not metadata:
-            raise HTTPException(
-                status_code=404,
-                detail="Could not fetch video metadata. Please verify the video exists and is accessible."
-            )
-
-        # Extract metadata fields
-        title = metadata.get('title', f'Video {video_id}')
-        channel_id = metadata.get('channel_id', 'unknown')
-        channel_name = metadata.get('channel', 'Unknown Channel')
-        duration_seconds = metadata.get('duration', 0)
-        view_count = metadata.get('view_count', 0)
-        upload_date = metadata.get('upload_date_string') or metadata.get('upload_date')
-
-        # Convert YYYYMMDD to YYYY-MM-DD if needed
-        if upload_date and len(upload_date) == 8 and '-' not in upload_date:
-            upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-
-        # Check if it's a short (respect SKIP_SHORTS setting)
-        config_settings = config_manager.get_settings()
-        skip_shorts = config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
-
-        if skip_shorts and duration_seconds and duration_seconds < 60:
-            raise HTTPException(
-                status_code=400,
-                detail=f"YouTube Shorts are not allowed (video is {duration_seconds}s long). Please add regular videos only."
-            )
-
-        # Add video to database with source_type='via_manual'
+        # Add video to database immediately with minimal metadata
+        # Background processor will fetch full metadata (avoids blocking web request with rate limit sleeps)
         success = video_db.add_video(
             video_id=video_id,
-            channel_id=channel_id,
-            title=title,
-            channel_name=channel_name,
-            duration_seconds=duration_seconds,
-            view_count=view_count,
-            upload_date=upload_date,
+            channel_id='unknown',
+            title=f"Video {video_id}",
+            channel_name='Unknown Channel',
+            duration_seconds=None,
+            view_count=None,
+            upload_date=None,
             processing_status='pending',
             source_type='via_manual'
         )
 
         if not success:
-            # This shouldn't happen since we checked above, but just in case
             raise HTTPException(
                 status_code=400,
                 detail="Failed to add video to database. It may already exist."
             )
 
-        logger.info(f"Added manual video {video_id}: {title}")
+        logger.info(f"Added manual video {video_id} to queue for processing")
 
         # Trigger immediate background processing
         try:
@@ -1503,12 +1532,12 @@ async def add_single_video(data: SingleVideoAdd):
 
         return {
             "status": "success",
-            "message": "Video added! Processing started in background.",
+            "message": "Video queued for processing!",
             "video": {
                 "id": video_id,
-                "title": title,
-                "channel_name": channel_name,
-                "duration_formatted": metadata.get('duration_string', 'Unknown'),
+                "title": f"Video {video_id}",
+                "channel_name": "Unknown Channel",
+                "duration_formatted": "Unknown",
                 "processing_status": "pending"
             }
         }

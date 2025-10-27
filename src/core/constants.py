@@ -11,6 +11,10 @@ Centralizes magic strings and default values to avoid duplication
 
 STATUS_PENDING = 'pending'
 STATUS_PROCESSING = 'processing'
+STATUS_FETCHING_METADATA = 'fetching_metadata'
+STATUS_FETCHING_TRANSCRIPT = 'fetching_transcript'
+STATUS_GENERATING_SUMMARY = 'generating_summary'
+STATUS_SENDING_EMAIL = 'sending_email'
 STATUS_SUCCESS = 'success'
 STATUS_FAILED_TRANSCRIPT = 'failed_transcript'
 STATUS_FAILED_AI = 'failed_ai'
@@ -41,7 +45,6 @@ MAX_TRANSCRIPT_CHARS = 15000  # ~3750 tokens
 
 # Summary configuration
 DEFAULT_SUMMARY_LENGTH = 500
-DEFAULT_MAX_VIDEOS_PER_CHANNEL = 5
 DEFAULT_CHECK_INTERVAL_HOURS = 4
 
 # Retry configuration

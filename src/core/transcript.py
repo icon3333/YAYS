@@ -122,7 +122,7 @@ class TranscriptExtractor:
             bool(self.cache),
         )
 
-    def get_transcript(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
+    def get_transcript(self, video_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Fetch transcript text and derived duration for a YouTube video.
         Routes to appropriate provider (legacy or supadata) based on configuration.
@@ -131,7 +131,8 @@ class TranscriptExtractor:
             video_id: YouTube video ID
 
         Returns:
-            Tuple of (transcript_text, duration) or (None, None) if unavailable
+            Tuple of (transcript_text, duration, method_used) or (None, None, None) if unavailable
+            method_used will be one of: 'youtube-transcript-api', 'supadata', or None
         """
         # Check cache first (applies to both providers)
         cached = self._get_cached_status(video_id)
@@ -141,13 +142,15 @@ class TranscriptExtractor:
                 video_id,
                 cached.get('status'),
             )
-            return None, None
+            return None, None, None
 
         # Route to appropriate provider
         if self.provider == "supadata":
-            return self._get_transcript_supadata(video_id)
+            text, duration = self._get_transcript_supadata(video_id)
+            return text, duration, 'supadata' if text else None
         else:
-            return self._get_transcript_legacy(video_id)
+            text, duration = self._get_transcript_legacy(video_id)
+            return text, duration, 'youtube-transcript-api' if text else None
 
     def _get_transcript_legacy(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -435,7 +438,12 @@ class TranscriptExtractor:
         cleaned_parts: List[str] = []
 
         for segment in segments:
-            text = segment.get("text", "").strip()
+            # Handle both dict and object formats
+            if hasattr(segment, 'text'):
+                text = segment.text.strip() if segment.text else ""
+            else:
+                text = segment.get("text", "").strip()
+
             if not text:
                 continue
 
@@ -457,8 +465,14 @@ class TranscriptExtractor:
             return None
 
         last_segment = segments[-1]
-        start = float(last_segment.get("start", 0))
-        duration = float(last_segment.get("duration", 0))
+        # Handle both dict and object formats
+        if hasattr(last_segment, 'start'):
+            start = float(last_segment.start) if last_segment.start else 0
+            duration = float(last_segment.duration) if last_segment.duration else 0
+        else:
+            start = float(last_segment.get("start", 0))
+            duration = float(last_segment.get("duration", 0))
+
         total_seconds = start + duration
         return total_seconds if total_seconds > 0 else None
 
@@ -520,3 +534,174 @@ class TranscriptExtractor:
             cache.clear_transcript_cache(video_id)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.debug("Failed to clear transcript cache for %s: %s", video_id, exc)
+
+    # ------------------------------------------------------------------
+    # Multi-fallback cascade
+    # ------------------------------------------------------------------
+
+    def get_transcript_cascade(self, video_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Try 4 methods in sequence until one succeeds.
+        Clean, simple cascade with detailed logging.
+
+        Args:
+            video_id: YouTube video ID
+
+        Returns:
+            Tuple of (transcript_text, duration, method_used) or (None, None, None) if all methods fail
+            method_used will be one of: 'youtube-transcript-api', 'yt-dlp', 'timedtext', 'supadata', or None
+        """
+        # Check cache first
+        cached = self._get_cached_status(video_id)
+        if cached:
+            logger.debug(
+                "Transcript cache hit for %s (status=%s) — skipping fetch",
+                video_id,
+                cached.get('status'),
+            )
+            return None, None, None
+
+        methods = [
+            ('youtube-transcript-api', 'youtube-transcript-api', self._method_1_youtube_api),
+            ('yt-dlp subtitles', 'yt-dlp', self._method_2_ytdlp),
+            ('timedtext API', 'timedtext', self._method_3_timedtext),
+            ('Supadata', 'supadata', self._method_4_supadata),
+        ]
+
+        for i, (display_name, method_name, method_func) in enumerate(methods, 1):
+            logger.info(f"📝 Method {i}/4: {display_name}...")
+            try:
+                result = method_func(video_id)
+                if result and result[0]:  # (text, duration)
+                    logger.info(f"✅ Success via {display_name}")
+                    self._clear_cache(video_id)
+                    return result[0], result[1], method_name
+                else:
+                    logger.debug(f"   Method {i} returned no transcript")
+            except Exception as e:
+                logger.debug(f"   Method {i} failed: {e}")
+                continue
+
+        logger.info("❌ All 4 methods exhausted")
+        return None, None, None
+
+    def _method_1_youtube_api(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Method 1: youtube-transcript-api (existing implementation)
+        Reuses existing _get_transcript_legacy logic
+        """
+        return self._get_transcript_legacy(video_id)
+
+    def _method_2_ytdlp(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Method 2: Extract subtitles via yt-dlp
+        Tries manual transcripts first, then auto-generated
+        """
+        import yt_dlp
+
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': self.preferred_languages,
+            'socket_timeout': 30,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            # Try manual subtitles first
+            for lang in self.preferred_languages:
+                if info.get('subtitles', {}).get(lang):
+                    for fmt in info['subtitles'][lang]:
+                        if fmt.get('ext') in ['json3', 'srv3']:
+                            text = self._fetch_subtitle_json3(fmt['url'])
+                            if text:
+                                logger.debug(f"   Found manual subtitle in {lang}")
+                                duration = self._format_duration(info.get('duration', 0))
+                                return text, duration
+
+            # Try auto-generated captions
+            for lang in self.preferred_languages:
+                if info.get('automatic_captions', {}).get(lang):
+                    for fmt in info['automatic_captions'][lang]:
+                        if fmt.get('ext') in ['json3', 'srv3']:
+                            text = self._fetch_subtitle_json3(fmt['url'])
+                            if text:
+                                logger.debug(f"   Found auto caption in {lang}")
+                                duration = self._format_duration(info.get('duration', 0))
+                                return text, duration
+
+            return None, None
+
+        except Exception as e:
+            logger.debug(f"   yt-dlp extraction failed: {e}")
+            return None, None
+
+    def _fetch_subtitle_json3(self, url: str) -> Optional[str]:
+        """
+        Fetch and parse JSON3 subtitle format from yt-dlp
+        """
+        import requests
+
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                if 'events' in data:
+                    texts = []
+                    for event in data['events']:
+                        if 'segs' in event:
+                            for seg in event['segs']:
+                                if 'utf8' in seg:
+                                    texts.append(seg['utf8'])
+                    text = ' '.join(texts).strip()
+                    # Clean up whitespace
+                    return ' '.join(text.split()) if text else None
+        except Exception as e:
+            logger.debug(f"   JSON3 parsing failed: {e}")
+
+        return None
+
+    def _method_3_timedtext(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Method 3: Direct YouTube timedtext API scraping
+        Simple XML parsing approach
+        """
+        import requests
+        from bs4 import BeautifulSoup
+
+        for lang in self.preferred_languages:
+            url = f"https://www.youtube.com/api/timedtext?v={video_id}&lang={lang}"
+            try:
+                r = requests.get(url, timeout=30)
+                if r.status_code == 200 and r.text and '<transcript>' in r.text:
+                    soup = BeautifulSoup(r.text, 'xml')
+                    texts = [tag.get_text() for tag in soup.find_all('text')]
+                    if texts:
+                        full_text = ' '.join(texts)
+                        # Clean up whitespace
+                        full_text = ' '.join(full_text.split())
+                        logger.debug(f"   Found timedtext in {lang}")
+                        return full_text, None
+            except Exception as e:
+                logger.debug(f"   timedtext API ({lang}) failed: {e}")
+                continue
+
+        return None, None
+
+    def _method_4_supadata(self, video_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Method 4: Supadata API (existing implementation)
+        Reuses existing _get_transcript_supadata logic
+        """
+        if self.provider != 'supadata' and not self.supadata_client:
+            # Skip if Supadata not configured
+            logger.debug("   Supadata not configured, skipping")
+            return None, None
+
+        return self._get_transcript_supadata(video_id)

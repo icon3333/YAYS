@@ -33,12 +33,15 @@ class ConfigManager:
     # Channels
     # ========================
 
-    def get_channels(self) -> Tuple[List[str], Dict[str, str]]:
+    def get_channels(self) -> Tuple[List[str], Dict[str, str], Dict[str, Optional[str]]]:
         """
         Get enabled channels from database.
 
         Returns:
-            Tuple of (channel_ids list, channel_names dict)
+            Tuple of (channel_ids list, channel_names dict, channel_added_dates dict)
+            - channel_ids: List of enabled channel IDs
+            - channel_names: Dict mapping channel_id to display name
+            - channel_added_dates: Dict mapping channel_id to added_at timestamp
         """
         return self.db.get_enabled_channels()
 
@@ -234,7 +237,6 @@ Transcript: {transcript}"""
             'SUMMARY_LENGTH': '500',
             'USE_SUMMARY_LENGTH': 'false',
             'SKIP_SHORTS': 'true',
-            'MAX_VIDEOS_PER_CHANNEL': '5',
         }
 
         try:
