@@ -64,6 +64,7 @@
             width: auto;
             display: inline-block;
             vertical-align: middle;
+            filter: invert(1) brightness(2);
         }
 
         /* Iconoir Icons */
