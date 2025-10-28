@@ -141,6 +141,7 @@ class VideoDatabase:
         # Must run outside the CREATE TABLE transaction for existing databases
         self._migrate_add_source_type()
         self._migrate_add_transcript_source()
+        self._migrate_add_retry_count()
         self._ensure_settings_table()
         self._ensure_channels_table()
         self._ensure_transcript_cache_table()
@@ -213,6 +214,31 @@ class VideoDatabase:
                 cursor.execute("""
                     ALTER TABLE videos
                     ADD COLUMN transcript_source TEXT
+                """)
+
+                conn.commit()
+
+    def _migrate_add_retry_count(self):
+        """
+        Migration: Add retry_count column to existing databases
+
+        This migration safely adds the retry_count column to track how many
+        times a failed video has been retried for processing.
+
+        Backward compatible: Existing videos will have retry_count = 0
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if retry_count column already exists
+            cursor.execute("PRAGMA table_info(videos)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'retry_count' not in columns:
+                # Add the column with default value 0
+                cursor.execute("""
+                    ALTER TABLE videos
+                    ADD COLUMN retry_count INTEGER DEFAULT 0
                 """)
 
                 conn.commit()

@@ -174,6 +174,15 @@ start_containers() {
     # Extract port from docker-compose.yml
     PORT=$(grep -A1 "ports:" docker-compose.yml | grep -o "[0-9]\{4,5\}:8000" | cut -d: -f1 || echo "8015")
 
+    # Create data and logs directories with proper permissions
+    # Docker container runs as UID 1000 (appuser), so we need to ensure these directories are writable
+    print_info "Setting up data directories..."
+    mkdir -p data logs
+
+    # Set permissions to allow container user (UID 1000) to write
+    # 777 is safe here as these are local bind mounts on homeserver
+    chmod 777 data logs 2>/dev/null || true
+
     if [ "$IS_UPDATE" = true ]; then
         # For updates, rebuild with no cache
         print_info "Rebuilding containers (this takes ~60 seconds)..."
