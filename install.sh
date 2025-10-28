@@ -1,18 +1,16 @@
 #!/bin/bash
 # YAYS - Yet Another YouTube Summarizer
 # ======================================
-# One-line installer for Docker deployment
+# Smart installer with auto-detection and systemd service support
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/icon3333/YAYS/main/install.sh | bash
 #
 # What this does:
 # 1. Checks prerequisites (Docker, git)
-# 2. Clones the repository to ~/YAYS
-# 3. Instructions to start containers
-#
-# Default port: 8000
-# To change: Edit docker-compose.yml before running docker-compose up
+# 2. Clones or updates the repository to ~/YAYS
+# 3. Automatically starts containers
+# 4. Offers systemd service installation (if available)
 
 set -e  # Exit on error
 
@@ -31,6 +29,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+# Global variables
+IS_UPDATE=false
+DOCKER_COMPOSE=""
+PORT=""
 
 # =============================================================================
 # Utility Functions
@@ -72,6 +75,20 @@ command_exists() {
 }
 
 # =============================================================================
+# Docker Compose Detection
+# =============================================================================
+
+detect_docker_compose() {
+    if docker compose version &>/dev/null; then
+        DOCKER_COMPOSE="docker compose"
+    elif command_exists docker-compose; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        exit_with_error "Neither 'docker compose' nor 'docker-compose' found. Please install Docker with Compose support."
+    fi
+}
+
+# =============================================================================
 # Prerequisite Checks
 # =============================================================================
 
@@ -94,12 +111,9 @@ check_prerequisites() {
 
     print_success "Docker is installed and running"
 
-    # Check Docker Compose
-    if ! command_exists docker-compose && ! docker compose version >/dev/null 2>&1; then
-        exit_with_error "Docker Compose is not installed. Please install it first."
-    fi
-
-    print_success "Docker Compose is available"
+    # Detect Docker Compose
+    detect_docker_compose
+    print_success "Docker Compose is available ($DOCKER_COMPOSE)"
 
     # Check git
     if ! command_exists git; then
@@ -116,35 +130,133 @@ check_prerequisites() {
 # Installation
 # =============================================================================
 
-clone_repository() {
-    print_step "Cloning repository..."
+clone_or_update_repository() {
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        IS_UPDATE=true
+        print_step "Existing installation detected - updating..."
 
-    if [ -d "$INSTALL_DIR" ]; then
-        print_warning "Directory $INSTALL_DIR already exists - using it"
+        cd "$INSTALL_DIR" || exit_with_error "Failed to enter directory: $INSTALL_DIR"
 
-        # Try to update it if it's a git repo
-        if [ -d "$INSTALL_DIR/.git" ]; then
-            cd "$INSTALL_DIR" || exit_with_error "Failed to enter directory: $INSTALL_DIR"
-            print_info "Pulling latest changes..."
-            git pull origin main 2>/dev/null || print_warning "Could not update (might have local changes)"
-            cd - > /dev/null
+        # Stop containers if running
+        if $DOCKER_COMPOSE ps | grep -q "Up"; then
+            print_info "Stopping containers..."
+            $DOCKER_COMPOSE down
         fi
 
-        print_success "Using existing repository at $INSTALL_DIR"
+        print_info "Pulling latest changes from GitHub..."
+        git fetch origin
+        git reset --hard origin/main
+
+        echo ""
+        print_info "Updated to:"
+        git log --oneline -3
+        echo ""
+
+        print_success "Updated to latest version"
+    elif [ -d "$INSTALL_DIR" ]; then
+        print_warning "Directory $INSTALL_DIR exists but is not a git repo"
+        exit_with_error "Please remove or rename $INSTALL_DIR and try again"
+    else
+        print_step "Installing YAYS..."
+        git clone "$REPO_URL" "$INSTALL_DIR" || exit_with_error "Failed to clone repository"
+        cd "$INSTALL_DIR" || exit_with_error "Failed to enter directory: $INSTALL_DIR"
+        print_success "Repository cloned to $INSTALL_DIR"
+    fi
+}
+
+# =============================================================================
+# Docker Operations
+# =============================================================================
+
+start_containers() {
+    print_step "Starting containers..."
+
+    # Extract port from docker-compose.yml
+    PORT=$(grep -A1 "ports:" docker-compose.yml | grep -o "[0-9]\{4,5\}:8000" | cut -d: -f1 || echo "8015")
+
+    if [ "$IS_UPDATE" = true ]; then
+        # For updates, rebuild with no cache
+        print_info "Rebuilding containers (this takes ~60 seconds)..."
+        $DOCKER_COMPOSE build --no-cache --pull
+    else
+        # For fresh installs, normal build
+        print_info "Building containers (this takes ~60 seconds)..."
+        $DOCKER_COMPOSE build
+    fi
+
+    print_info "Starting services..."
+    $DOCKER_COMPOSE up -d
+
+    print_info "Waiting for services to be healthy..."
+    sleep 5
+
+    print_success "Containers started successfully"
+}
+
+# =============================================================================
+# Systemd Service Installation
+# =============================================================================
+
+offer_systemd_service() {
+    # Only offer on Linux systems with systemd
+    if [[ "$OSTYPE" != "linux-gnu"* ]] || ! command_exists systemctl; then
         return 0
     fi
 
-    git clone "$REPO_URL" "$INSTALL_DIR" || exit_with_error "Failed to clone repository"
+    # Check if service file exists
+    if [ ! -f "youtube-summarizer.service" ]; then
+        return 0
+    fi
 
-    print_success "Repository cloned to $INSTALL_DIR"
+    # Check if already installed
+    if systemctl is-enabled --quiet youtube-summarizer 2>/dev/null; then
+        print_info "Systemd service already installed"
+        return 0
+    fi
+
+    echo ""
+    print_step "Systemd service installation available"
+    print_info "This will automatically start YAYS on boot"
+    echo ""
+    read -p "Install systemd service? (y/N): " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        install_systemd_service
+    else
+        print_info "Skipped systemd service installation"
+        print_info "You can install it later by running: ./install-service.sh"
+    fi
 }
 
-check_ready() {
-    print_step "Setup complete"
+install_systemd_service() {
+    USERNAME=$(whoami)
+    PROJECT_DIR=$(pwd)
 
-    cd "$INSTALL_DIR" || exit_with_error "Failed to enter directory: $INSTALL_DIR"
+    print_info "Installing systemd service..."
 
-    print_info "Ready to start"
+    # Create temporary service file with correct paths
+    TEMP_SERVICE=$(mktemp)
+    sed "s|YOUR_USERNAME|$USERNAME|g" youtube-summarizer.service > "$TEMP_SERVICE"
+    sed "s|WorkingDirectory=/home/$USERNAME/youtube-summarizer|WorkingDirectory=$PROJECT_DIR|g" "$TEMP_SERVICE" > "${TEMP_SERVICE}.tmp"
+    mv "${TEMP_SERVICE}.tmp" "$TEMP_SERVICE"
+
+    # Update docker-compose command if using modern syntax
+    if [[ "$DOCKER_COMPOSE" == "docker compose" ]]; then
+        sed "s|/usr/bin/docker-compose|/usr/bin/docker compose|g" "$TEMP_SERVICE" > "${TEMP_SERVICE}.tmp"
+        mv "${TEMP_SERVICE}.tmp" "$TEMP_SERVICE"
+    fi
+
+    # Install service file
+    sudo cp "$TEMP_SERVICE" /etc/systemd/system/youtube-summarizer.service
+    rm "$TEMP_SERVICE"
+
+    # Reload and enable
+    sudo systemctl daemon-reload
+    sudo systemctl enable youtube-summarizer
+
+    print_success "Systemd service installed and enabled"
+    print_info "Service will start automatically on boot"
 }
 
 # =============================================================================
@@ -156,35 +268,29 @@ print_success_message() {
     print_header "Installation Complete!"
 
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}Next Steps:${NC}"
+    echo -e "${GREEN}YAYS is now running!${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo -e "${YELLOW}1. (Optional) Change port:${NC}"
-    echo -e "   Edit ${BLUE}docker-compose.yml${NC} line 16"
-    echo "   Change \"8000:8000\" to \"3000:8000\" (or your port)"
+    echo -e "${YELLOW}Web UI:${NC} http://localhost:$PORT"
     echo ""
-    echo -e "${YELLOW}2. Start containers:${NC}"
-    echo -e "   ${BLUE}cd $INSTALL_DIR${NC}"
-    echo -e "   ${BLUE}docker-compose up -d${NC}"
-    echo ""
-    echo -e "${YELLOW}3. Open web UI and configure:${NC}"
-    echo "   http://localhost:8000 (or your custom port)"
-    echo ""
-    echo "   In Settings tab, add:"
-    echo "   - OpenAI API key"
-    echo "   - Target email (your inbox or RSS reader email-to-tag)"
-    echo "   - Gmail SMTP credentials"
-    echo ""
-    echo -e "${YELLOW}4. Add YouTube channels and start processing!${NC}"
+    echo -e "${YELLOW}Next Steps:${NC}"
+    echo "  1. Open the Web UI above"
+    echo "  2. Go to Settings tab and configure:"
+    echo "     - OpenAI API key"
+    echo "     - Target email address"
+    echo "     - SMTP credentials (for email delivery)"
+    echo "  3. Add YouTube channels in the Channels tab"
+    echo "  4. Start processing videos!"
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}Useful Commands:${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "  View logs:           docker-compose logs -f"
-    echo "  Restart:             docker-compose restart"
-    echo "  Stop:                docker-compose stop"
-    echo "  Process videos now:  docker exec youtube-summarizer python process_videos.py"
+    echo "  View logs:           $DOCKER_COMPOSE logs -f"
+    echo "  Restart:             $DOCKER_COMPOSE restart"
+    echo "  Stop:                $DOCKER_COMPOSE stop"
+    echo "  Update:              ./update.sh"
+    echo "  Process now:         docker exec youtube-summarizer python process_videos.py"
     echo ""
     echo -e "${YELLOW}Documentation:${NC} $INSTALL_DIR/README.md"
     echo ""
@@ -198,8 +304,9 @@ main() {
     print_header "YAYS - Yet Another YouTube Summarizer"
 
     check_prerequisites
-    clone_repository
-    check_ready
+    clone_or_update_repository
+    start_containers
+    offer_systemd_service
     print_success_message
 }
 

@@ -14,7 +14,7 @@ services:
     container_name: youtube-web
     restart: always
     ports:
-      - "8015:8000"
+      - "127.0.0.1:8015:8000"
     volumes:
       # Shared config (read/write with locking)
       - ./config.txt:/app/config.txt
