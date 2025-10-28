@@ -1678,11 +1678,23 @@
             resultDiv.innerHTML = '<div class="test-result">Sending test email...</div>';
 
             try {
+                // Get current form field values
+                const targetEmail = document.getElementById('TARGET_EMAIL')?.value.trim();
+                const smtpUser = document.getElementById('SMTP_USER')?.value.trim();
+                const smtpPass = document.getElementById('SMTP_PASS')?.value.trim();
+
+                // Build request body with form values (allows testing before saving)
+                const requestBody = {};
+                if (targetEmail) requestBody.target_email = targetEmail;
+                if (smtpUser) requestBody.smtp_user = smtpUser;
+                if (smtpPass) requestBody.smtp_pass = smtpPass;
+
                 const response = await fetch('/api/settings/send-test-email', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify(requestBody)
                 });
 
                 if (!response.ok) {
@@ -1951,6 +1963,49 @@ Transcript: {transcript}`;
             input.addEventListener('input', showIndicator);
             input.addEventListener('change', showIndicator);
         });
+
+        // Auto-load OpenAI models when API key is entered
+        const apiKeyInput = document.getElementById('OPENAI_API_KEY');
+        if (apiKeyInput) {
+            let modelLoadTimeout;
+
+            apiKeyInput.addEventListener('input', function() {
+                clearTimeout(modelLoadTimeout);
+                const apiKey = this.value.trim();
+
+                // Check if it looks like a valid OpenAI key (starts with sk-, not masked, sufficient length)
+                if (apiKey && apiKey.startsWith('sk-') && !apiKey.includes('***') && !apiKey.includes('•') && apiKey.length > 20) {
+                    // Debounce: wait 1.5 seconds after user stops typing
+                    modelLoadTimeout = setTimeout(async () => {
+                        console.log('Auto-loading OpenAI models for new API key...');
+
+                        // Show loading state in model dropdown
+                        const modelSelect = document.getElementById('OPENAI_MODEL');
+                        if (modelSelect) {
+                            const originalHTML = modelSelect.innerHTML;
+                            modelSelect.innerHTML = '<option value="">Loading models...</option>';
+                            modelSelect.disabled = true;
+
+                            try {
+                                // Temporarily save the API key to test it
+                                await fetch('/api/settings', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ settings: { 'OPENAI_API_KEY': apiKey } })
+                                });
+
+                                // Load the available models
+                                await loadOpenAIModels(true);
+                            } catch (error) {
+                                console.error('Failed to load models:', error);
+                                modelSelect.innerHTML = originalHTML;
+                                modelSelect.disabled = false;
+                            }
+                        }
+                    }, 1500);
+                }
+            });
+        }
 
         // ============================================================================
         // VIDEO FEED ENHANCEMENTS

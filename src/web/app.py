@@ -810,10 +810,19 @@ async def test_credentials(data: CredentialTest):
 
 
 @app.post("/api/settings/send-test-email")
-async def send_test_email():
+async def send_test_email(request: Request):
     """
     Send a test email to the configured TARGET_EMAIL address.
     This tests SMTP connection, authentication, AND email delivery.
+
+    Accepts optional parameters from request body to test unsaved settings:
+    - target_email: Email address to send test to
+    - smtp_user: SMTP username
+    - smtp_pass: SMTP password
+    - smtp_server: SMTP server (defaults to smtp.gmail.com)
+    - smtp_port: SMTP port (defaults to 587)
+
+    If parameters not provided, falls back to database settings.
 
     Returns:
         dict: Success status and message
@@ -823,12 +832,24 @@ async def send_test_email():
     from src.core.email_sender import EmailSender
 
     try:
-        # Get email settings from database
-        all_settings = settings_manager.get_all_settings(mask_secrets=False)
+        # Try to get settings from request body first
+        body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
 
-        target_email = all_settings.get('TARGET_EMAIL', {}).get('value')
-        smtp_user = all_settings.get('SMTP_USER', {}).get('value')
-        smtp_pass = all_settings.get('SMTP_PASS', {}).get('value')
+        # Use provided values or fall back to database
+        if body:
+            target_email = body.get('target_email')
+            smtp_user = body.get('smtp_user')
+            smtp_pass = body.get('smtp_pass')
+            smtp_server = body.get('smtp_server', 'smtp.gmail.com')
+            smtp_port = body.get('smtp_port', 587)
+        else:
+            # Get email settings from database
+            all_settings = settings_manager.get_all_settings(mask_secrets=False)
+            target_email = all_settings.get('TARGET_EMAIL', {}).get('value')
+            smtp_user = all_settings.get('SMTP_USER', {}).get('value')
+            smtp_pass = all_settings.get('SMTP_PASS', {}).get('value')
+            smtp_server = 'smtp.gmail.com'
+            smtp_port = 587
 
         # Validate required settings
         if not target_email:
