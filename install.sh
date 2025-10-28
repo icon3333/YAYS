@@ -19,8 +19,8 @@ set -e  # Exit on error
 # =============================================================================
 
 REPO_URL="https://github.com/icon3333/YAYS.git"
-PROJECT_NAME="YAYS"
-INSTALL_DIR="$HOME/$PROJECT_NAME"
+PROJECT_NAME="yays"
+INSTALL_DIR="$(pwd)/$PROJECT_NAME"
 
 # Colors
 RED='\033[0;31m'
