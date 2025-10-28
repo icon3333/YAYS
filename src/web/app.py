@@ -859,13 +859,13 @@ async def send_test_email(request: Request):
         if not smtp_pass:
             return {"success": False, "message": "❌ SMTP_PASS not configured"}
 
-        # Validate password length (should be 16 chars for Gmail app password)
-        if len(smtp_pass) != 16:
-            return {"success": False, "message": "❌ SMTP_PASS invalid (must be 16 characters)"}
+        # Note: We don't validate password length here - let the SMTP server validate credentials
+        # Gmail app passwords are typically 16 chars, but other providers may differ
 
         # Create test email content
         test_video = {
             'title': 'YAYS Email Configuration Test',
+            'id': 'test',  # EmailSender expects 'id' not 'video_id'
             'video_id': 'test',
             'url': 'https://github.com/icon3333/YAYS',
             'duration_string': 'Test',

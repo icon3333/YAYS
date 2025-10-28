@@ -15,7 +15,9 @@ config.txt
 .claude.md
 claude.md
 
-# Data and logs
+# ⚠️ CRITICAL: Data and logs - NEVER REMOVE data/ FROM GITIGNORE
+# The data/ directory contains videos.db which must be preserved during updates
+# Keeping it gitignored ensures git operations never touch the database
 data/
 logs/
 *.log

@@ -8,6 +8,38 @@ import subprocess
 from pathlib import Path
 
 
+def detect_docker_compose_command():
+    """
+    Detect which Docker Compose command is available
+    Returns: list with command parts, or None if not available
+    """
+    # Try modern 'docker compose' first
+    try:
+        result = subprocess.run(
+            ['docker', 'compose', 'version'],
+            capture_output=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return ['docker', 'compose']
+    except:
+        pass
+
+    # Try legacy 'docker-compose'
+    try:
+        result = subprocess.run(
+            ['docker-compose', 'version'],
+            capture_output=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return ['docker-compose']
+    except:
+        pass
+
+    return None
+
+
 def detect_runtime_environment():
     """
     Detect if running in Docker or native Python
@@ -15,13 +47,13 @@ def detect_runtime_environment():
     """
     # Check if running in Docker container (most reliable check)
     if os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv'):
-        return ('docker', 'docker-compose restart')
+        return ('docker', 'docker compose restart')
 
     # Check if running inside a Docker container by checking cgroup
     try:
         with open('/proc/1/cgroup', 'r') as f:
             if 'docker' in f.read():
-                return ('docker', 'docker-compose restart')
+                return ('docker', 'docker compose restart')
     except:
         pass
 
@@ -39,13 +71,23 @@ def restart_application():
 
     try:
         if env_type == 'docker':
+            # Detect which Docker Compose command is available
+            docker_compose_cmd = detect_docker_compose_command()
+
+            if docker_compose_cmd is None:
+                return {
+                    "success": False,
+                    "message": "Neither 'docker compose' nor 'docker-compose' found. Please install Docker Compose or restart manually",
+                    "restart_type": "docker"
+                }
+
             # Try to restart Docker containers
             result = subprocess.run(
-                ['docker-compose', 'restart'],
+                docker_compose_cmd + ['restart'],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd=Path(__file__).parent
+                cwd=Path(__file__).parent.parent.parent  # Navigate to project root
             )
 
             if result.returncode == 0:
@@ -79,19 +121,6 @@ def restart_application():
                 "restart_command": [python_executable, script_path] + sys.argv[1:]
             }
 
-    except FileNotFoundError:
-        if env_type == 'docker':
-            return {
-                "success": False,
-                "message": "docker-compose command not found. Please install Docker Compose or restart manually",
-                "restart_type": "docker"
-            }
-        else:
-            return {
-                "success": False,
-                "message": "Restart failed. Please restart manually",
-                "restart_type": "python"
-            }
     except subprocess.TimeoutExpired:
         return {
             "success": False,

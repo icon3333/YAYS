@@ -49,7 +49,8 @@ COPY src/ ./src/
 COPY main.py .
 
 # Create necessary directories with correct permissions
-RUN mkdir -p /app/logs && \
+# ⚠️ CRITICAL: Web service needs data/ for database access (settings stored in data/videos.db)
+RUN mkdir -p /app/data /app/logs && \
     chown -R appuser:appuser /app
 
 # Switch to non-root user

@@ -11,6 +11,10 @@
 # 2. Clones or updates the repository to ~/YAYS
 # 3. Automatically starts containers
 # 4. Offers systemd service installation (if available)
+#
+# ⚠️ DATABASE SAFETY GUARANTEE:
+# This script NEVER modifies or deletes the database (data/videos.db)
+# Updates are safe and preserve all your data, channels, and settings
 
 set -e  # Exit on error
 
@@ -143,6 +147,13 @@ clone_or_update_repository() {
             $DOCKER_COMPOSE down
         fi
 
+        # ⚠️ CRITICAL: Database preservation
+        # The data/ directory contains videos.db and MUST be preserved during updates
+        # This is safe because:
+        # 1. data/ is in .gitignore - git reset won't touch it
+        # 2. Docker bind mounts preserve data across container rebuilds
+        # DO NOT add any commands that delete or modify data/ directory
+
         print_info "Pulling latest changes from GitHub..."
         git fetch origin
         git reset --hard origin/main
@@ -174,7 +185,9 @@ start_containers() {
     # Extract port from docker-compose.yml
     PORT=$(grep -A1 "ports:" docker-compose.yml | grep -o "[0-9]\{4,5\}:8000" | cut -d: -f1 || echo "8015")
 
-    # Create data and logs directories with proper permissions
+    # ⚠️ CRITICAL: Database preservation
+    # The mkdir -p command ONLY creates directories if they don't exist
+    # It will NEVER delete or modify existing data/videos.db
     # Docker container runs as UID 1000 (appuser), so we need to ensure these directories are writable
     print_info "Setting up data directories..."
     mkdir -p data logs

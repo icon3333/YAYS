@@ -1996,6 +1996,9 @@ Transcript: {transcript}`;
 
                                 // Load the available models
                                 await loadOpenAIModels(true);
+
+                                // Re-enable the dropdown after successful load
+                                modelSelect.disabled = false;
                             } catch (error) {
                                 console.error('Failed to load models:', error);
                                 modelSelect.innerHTML = originalHTML;

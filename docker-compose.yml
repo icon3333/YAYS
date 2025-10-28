@@ -20,6 +20,9 @@ services:
       - ./config.txt:/app/config.txt
       # Environment variables (persistent, created from .env.example if missing)
       - ./.env:/app/.env
+      # ⚠️ CRITICAL: Database must be mounted for settings persistence
+      # Web UI reads/writes settings to data/videos.db
+      - ./data:/app/data
       # Logs directory (persistent)
       - ./logs:/app/logs
     environment:
@@ -61,7 +64,9 @@ services:
       - ./config.txt:/app/config.txt
       # Environment variables (persistent, settings saved in Web UI)
       - ./.env:/app/.env
-      # Data directory (persistent, stores processed videos)
+      # ⚠️ CRITICAL: Database preservation via bind mount
+      # Data directory contains videos.db and is preserved across container rebuilds
+      # NEVER change this to a named volume or remove this mount
       - ./data:/app/data
       # Logs directory (persistent)
       - ./logs:/app/logs
