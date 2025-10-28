@@ -27,6 +27,7 @@ services:
       - ./logs:/app/logs
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - YAYS_MASTER_KEY=${YAYS_MASTER_KEY}
     networks:
       - youtube-net
     healthcheck:
@@ -71,6 +72,8 @@ services:
       # Logs directory (persistent)
       - ./logs:/app/logs
     environment:
+      # Encryption key (must match web service)
+      - YAYS_MASTER_KEY=${YAYS_MASTER_KEY}
       # Required credentials (configure in web UI Settings tab)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - TARGET_EMAIL=${TARGET_EMAIL:-}

@@ -44,21 +44,24 @@ def detect_runtime_environment():
     """
     Detect if running in Docker or native Python
     Returns: tuple ('docker'|'python', command_description)
+
+    NOTE: When we're INSIDE a Docker container, we restart the Python process.
+    We only try to use docker-compose when running outside containers (native mode).
     """
     # Check if running in Docker container (most reliable check)
     if os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv'):
-        return ('docker', 'docker compose restart')
+        return ('python', 'restart_python_process')
 
     # Check if running inside a Docker container by checking cgroup
     try:
         with open('/proc/1/cgroup', 'r') as f:
             if 'docker' in f.read():
-                return ('docker', 'docker compose restart')
+                return ('python', 'restart_python_process')
     except:
         pass
 
     # Running in native Python mode
-    # In Python mode, we need to restart both web.py and summarizer.py processes
+    # In Python mode, we restart the process using os.execv
     return ('python', 'restart_python_processes')
 
 
@@ -104,22 +107,32 @@ def restart_application():
                     "restart_type": "docker"
                 }
 
-        else:  # python mode
-            # For Python mode, restart the current process
+        else:  # python mode (or inside Docker container)
+            # When running inside a Docker container, we exit and let Docker restart us
+            # When running in native Python, we use os.execv to restart the process
             import sys
 
-            # Get the current Python executable and script
-            python_executable = sys.executable
-            script_path = sys.argv[0]
+            # Check if we're inside Docker
+            in_docker = os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
 
-            # Schedule restart using os.execv (replaces current process)
-            # This needs to be done after returning the response
-            return {
-                "success": True,
-                "message": "Restarting application...",
-                "restart_type": "python",
-                "restart_command": [python_executable, script_path] + sys.argv[1:]
-            }
+            if in_docker:
+                # Exit with code 0 so Docker's restart policy kicks in
+                # We'll schedule this to happen after the response is sent
+                return {
+                    "success": True,
+                    "message": "Restarting application... (this may take 10-20 seconds)",
+                    "restart_type": "python",
+                    "restart_method": "docker_exit"
+                }
+            else:
+                # Native Python mode: restart using os.execv
+                return {
+                    "success": True,
+                    "message": "Restarting application...",
+                    "restart_type": "python",
+                    "restart_method": "execv",
+                    "restart_command": [sys.executable, sys.argv[0]] + sys.argv[1:]
+                }
 
     except subprocess.TimeoutExpired:
         return {

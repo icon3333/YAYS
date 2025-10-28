@@ -591,12 +591,25 @@ async def restart_app():
         logger.info(f"Restart requested - Type: {result['restart_type']}, Success: {result['success']}")
 
         # For Python mode, schedule the restart after response is sent
-        if result['restart_type'] == 'python' and result['success'] and 'restart_command' in result:
+        if result['restart_type'] == 'python' and result['success']:
             import asyncio
+            import sys
+
             async def delayed_restart():
                 await asyncio.sleep(1)  # Give time for response to be sent
-                logger.info("Executing Python restart...")
-                os.execv(result['restart_command'][0], result['restart_command'])
+
+                # Check restart method
+                restart_method = result.get('restart_method', 'execv')
+
+                if restart_method == 'docker_exit':
+                    # Exit to trigger Docker's restart policy
+                    logger.info("Exiting to trigger Docker restart...")
+                    sys.exit(0)
+                else:
+                    # Native Python restart using execv
+                    if 'restart_command' in result:
+                        logger.info("Executing Python restart...")
+                        os.execv(result['restart_command'][0], result['restart_command'])
 
             asyncio.create_task(delayed_restart())
 
