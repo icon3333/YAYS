@@ -207,6 +207,18 @@ class SettingsManager:
             # Generic password: all dots
             return '•' * min(len(value), 16)
 
+    def get_setting(self, key: str) -> Optional[str]:
+        """
+        Get a single setting value from database.
+
+        Args:
+            key: Setting key
+
+        Returns:
+            Setting value or None if not found
+        """
+        return self.db.get_setting(key)
+
     def get_all_settings(self, mask_secrets=True) -> Dict[str, Any]:
         """
         Get all settings from database with optional masking.
