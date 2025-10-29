@@ -154,10 +154,13 @@ class SettingsEncryption:
         try:
             decrypted_bytes = self._cipher.decrypt(ciphertext.encode('utf-8'))
             return decrypted_bytes.decode('utf-8')
-        except Exception as e:
+        except Exception:
             # If decryption fails, return empty string
-            # This can happen if key changed or data is corrupted
-            print(f"⚠️ Decryption failed: {e}")
+            # This can happen if:
+            # - Encryption key changed (different YAYS_MASTER_KEY)
+            # - Data is corrupted
+            # - Value is not actually encrypted (plain text in database)
+            # Silently return empty string - the caller will handle missing values
             return ''
 
     def is_encrypted(self, value: str) -> bool:

@@ -601,53 +601,56 @@
             const addBtn = document.getElementById('addBtn');
 
             const input = idInput.value.trim();
-            const name = nameInput.value.trim();
+            let name = nameInput.value.trim();
 
             if (!input) {
                 showStatus('Please enter a channel ID or URL', true);
                 return;
             }
 
-            // Get the actual channel ID by calling the fetch endpoint
-            // This will handle URLs, @handles, and channel IDs
             isLoading = true;
             addBtn.disabled = true;
-
-            // Start countdown timer for channel resolution
-            startButtonCountdown(addBtn, 'Resolving', ytdlpTiming.estimated_channel_fetch);
+            addBtn.textContent = 'Adding...';
 
             let channelId;
             let channelName;
 
-            try {
-                const response = await fetch(`/api/fetch-channel-name/${encodeURIComponent(input)}`);
+            // Check if we have cached channel info from the auto-fetch
+            if (cachedChannelInfo && cachedChannelInfo.input === input) {
+                // Use cached data - no need to fetch again!
+                channelId = cachedChannelInfo.channel_id;
+                channelName = name || cachedChannelInfo.channel_name;
+                console.log('Using cached channel info (instant!)');
+            } else {
+                // No cache available, need to fetch
+                // This happens if user manually types a channel ID without triggering auto-fetch
+                try {
+                    const response = await fetch(`/api/fetch-channel-name/${encodeURIComponent(input)}`);
 
-                if (!response.ok) {
-                    const error = await response.json();
-                    showStatus(error.detail || 'Invalid channel', true);
+                    if (!response.ok) {
+                        const error = await response.json();
+                        showStatus(error.detail || 'Invalid channel', true);
+                        isLoading = false;
+                        addBtn.disabled = false;
+                        addBtn.textContent = 'Add Channel';
+                        return;
+                    }
+
+                    const data = await response.json();
+                    channelId = data.channel_id;
+                    channelName = name || data.channel_name;
+
+                    if (!name) {
+                        nameInput.value = data.channel_name; // Auto-fill
+                    }
+
+                } catch (error) {
+                    showStatus('Failed to resolve channel: ' + error.message, true);
                     isLoading = false;
                     addBtn.disabled = false;
-                    clearButtonCountdown(addBtn);
                     addBtn.textContent = 'Add Channel';
                     return;
                 }
-
-                const data = await response.json();
-                channelId = data.channel_id;
-                channelName = name || data.channel_name;
-
-                // Auto-fill the display name field if it was left empty
-                if (!name && data.channel_name) {
-                    nameInput.value = data.channel_name;
-                }
-
-            } catch (error) {
-                showStatus('Failed to resolve channel: ' + error.message, true);
-                isLoading = false;
-                addBtn.disabled = false;
-                clearButtonCountdown(addBtn);
-                addBtn.textContent = 'Add Channel';
-                return;
             }
 
             // Check if already exists
@@ -655,48 +658,35 @@
                 showStatus('Channel already exists', true);
                 isLoading = false;
                 addBtn.disabled = false;
-                clearButtonCountdown(addBtn);
                 addBtn.textContent = 'Add Channel';
                 return;
             }
 
-            // Add
-            addBtn.textContent = 'Adding...';
-
+            // Add to local arrays
             channels.push(channelId);
             channelNames[channelId] = channelName;
 
+            // Save to backend
             const saved = await saveChannels();
 
-            // If save was successful, fetch initial videos
             if (saved) {
-                // Start countdown timer for video fetching
-                startButtonCountdown(addBtn, 'Fetching videos', ytdlpTiming.estimated_video_fetch);
-
+                // Trigger background video processing (non-blocking)
                 try {
-                    const response = await fetch(`/api/channels/${encodeURIComponent(channelId)}/fetch-initial-videos`, {
-                        method: 'POST'
-                    });
-
-                    if (response.ok) {
-                        const result = await response.json();
-                        showStatus(`Channel added! Fetched ${result.videos_fetched} recent videos.`, false);
-                    } else {
-                        showStatus('Channel added, but could not fetch initial videos', false);
-                    }
+                    await fetch('/api/videos/process-now', { method: 'POST' });
                 } catch (error) {
-                    console.error('Error fetching initial videos:', error);
-                    showStatus('Channel added, but could not fetch initial videos', false);
+                    console.log('Background processing trigger failed (non-critical):', error);
                 }
+
+                showStatus(`✓ Channel "${channelName}" added! Videos will be processed in the background.`, false);
             }
 
+            // Clear inputs and refresh UI
             idInput.value = '';
             nameInput.value = '';
             renderChannels();
 
             isLoading = false;
             addBtn.disabled = false;
-            clearButtonCountdown(addBtn);
             addBtn.textContent = 'Add Channel';
         }
 
@@ -1121,10 +1111,15 @@
             });
         }
 
-        // Auto-fetch channel name
+        // Auto-fetch channel name and cache the result
         let fetchTimeout = null;
+        let cachedChannelInfo = null; // Cache to avoid redundant fetches
+
         document.getElementById('channelId').addEventListener('input', async e => {
             const input = e.target.value.trim();
+
+            // Clear cache when input changes
+            cachedChannelInfo = null;
 
             // Clear previous timeout
             if (fetchTimeout) clearTimeout(fetchTimeout);
@@ -1151,14 +1146,24 @@
 
                     if (response.ok) {
                         const data = await response.json();
+
+                        // Cache the result for use in addChannel()
+                        cachedChannelInfo = {
+                            input: input,
+                            channel_id: data.channel_id,
+                            channel_name: data.channel_name
+                        };
+
                         nameInput.value = data.channel_name;
                         showStatus(`Found: ${data.channel_name}`, false);
                     } else {
                         nameInput.value = '';
+                        cachedChannelInfo = null;
                         console.log('Could not fetch channel name');
                     }
                 } catch (error) {
                     nameInput.value = '';
+                    cachedChannelInfo = null;
                     console.log('Error fetching channel name:', error);
                 } finally {
                     nameInput.disabled = false;

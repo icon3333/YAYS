@@ -213,82 +213,21 @@ async def save_channels(data: ChannelUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# DEPRECATED: This endpoint is no longer used - channels are added via /api/channels
+# and videos are processed by the background worker (/api/videos/process-now)
+# Kept for backward compatibility but returns immediate success
 @app.post("/api/channels/{channel_id}/fetch-initial-videos")
 async def fetch_initial_videos(channel_id: str):
     """
-    Fetch and PROCESS the last X videos for a newly added channel
-    Adds videos to database as 'pending' and triggers background processing
+    [DEPRECATED] This endpoint is no longer used.
+    Channels are added via /api/channels POST, and videos are processed by background worker.
     """
-    try:
-        # Get settings
-        config_settings = config_manager.get_settings()
-        skip_shorts = config_settings.get('SKIP_SHORTS', 'true').lower() == 'true'
-
-        # Don't backfill old videos when adding new channels
-        logger.info(f"Adding new channel without backfilling old videos: {channel_id}")
-
-        # Fetch videos using YouTubeClient (yt-dlp with RSS fallback)
-        videos = youtube_client.get_channel_videos(channel_id, max_videos=0, skip_shorts=skip_shorts)
-
-        if not videos:
-            logger.warning(f"Could not fetch videos for channel: {channel_id}")
-            return {
-                "status": "error",
-                "message": "Could not fetch videos from channel",
-                "videos_fetched": 0
-            }
-
-        # Add videos to database as 'pending' for processing
-        channel_name = config.get('channel_names', {}).get(channel_id, channel_id)
-
-        for video in videos:
-            # Fetch metadata using ytdlp_client
-            metadata = ytdlp_client.get_video_metadata(video['id'])
-
-            if metadata:
-                duration_seconds = metadata.get('duration')
-                view_count = metadata.get('view_count')
-                upload_date = metadata.get('upload_date_string') or metadata.get('upload_date')
-                # Convert YYYYMMDD to YYYY-MM-DD if needed
-                if upload_date and len(upload_date) == 8 and '-' not in upload_date:
-                    upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-            else:
-                duration_seconds = None
-                view_count = None
-                upload_date = None
-
-            # Add video with status='pending' (will be processed by process_videos.py)
-            video_db.add_video(
-                video_id=video['id'],
-                channel_id=channel_id,
-                title=video['title'],
-                channel_name=channel_name,
-                duration_seconds=duration_seconds,
-                view_count=view_count,
-                upload_date=upload_date,
-                processing_status='pending',  # Mark as pending for processing
-                summary_length=None,
-                summary_text=None
-            )
-
-        logger.info(f"Added {len(videos)} videos as pending for channel {channel_id}")
-
-        # Trigger immediate processing in background
-        try:
-            subprocess.Popen(['python3', 'process_videos.py'])
-            logger.info("Started background processing")
-        except Exception as e:
-            logger.error(f"Failed to start background processing: {e}")
-
-        return {
-            "status": "success",
-            "message": f"Fetched {len(videos)} videos. Processing started in background.",
-            "videos_fetched": len(videos)
-        }
-
-    except Exception as e:
-        logger.error(f"Error fetching initial videos for {channel_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.warning(f"Deprecated endpoint called: /api/channels/{channel_id}/fetch-initial-videos")
+    return {
+        "status": "success",
+        "message": "Channel processing will happen in background",
+        "videos_fetched": 0
+    }
 
 
 @app.get("/health")
@@ -345,6 +284,18 @@ async def fetch_channel_name(channel_input: str):
     Accepts: channel ID (UCxxxx), @handle, or YouTube URLs
     """
     try:
+        # Decode and fix common URL encoding issues
+        from urllib.parse import unquote
+        channel_input = unquote(channel_input)
+
+        # Fix malformed URLs (https:/ -> https://)
+        if channel_input.startswith('https:/') and not channel_input.startswith('https://'):
+            channel_input = channel_input.replace('https:/', 'https://', 1)
+        elif channel_input.startswith('http:/') and not channel_input.startswith('http://'):
+            channel_input = channel_input.replace('http:/', 'http://', 1)
+
+        logger.debug(f"Fetch channel name for: {channel_input}")
+
         # Use yt-dlp for robust channel ID extraction
         channel_info = ytdlp_client.extract_channel_info(channel_input)
 
@@ -364,7 +315,7 @@ async def fetch_channel_name(channel_input: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching channel name: {e}")
+        logger.error(f"Error fetching channel name for '{channel_input}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch channel name: {str(e)}")
 
 

@@ -426,6 +426,12 @@ class YTDLPClient:
 
     def _normalize_channel_url(self, channel_input: str) -> str:
         """Convert any channel input to a valid YouTube URL"""
+        # Fix malformed URLs (https:/ -> https://)
+        if channel_input.startswith('https:/') and not channel_input.startswith('https://'):
+            channel_input = channel_input.replace('https:/', 'https://', 1)
+        elif channel_input.startswith('http:/') and not channel_input.startswith('http://'):
+            channel_input = channel_input.replace('http:/', 'http://', 1)
+
         # Already a URL
         if channel_input.startswith('http'):
             # Ensure /videos suffix for better results
