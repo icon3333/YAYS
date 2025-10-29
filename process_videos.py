@@ -244,8 +244,8 @@ class VideoProcessor:
 
                     # Stale lock file, remove it
                     self.pid_lock_file.unlink()
-                except (ValueError, FileNotFoundError):
-                    # Invalid lock file, remove it
+                except (ValueError, FileNotFoundError, psutil.NoSuchProcess):
+                    # Invalid or stale lock file, remove it
                     try:
                         self.pid_lock_file.unlink()
                     except FileNotFoundError:
@@ -257,9 +257,15 @@ class VideoProcessor:
             return True
 
         except Exception as e:
-            # If we can't acquire lock due to error, assume another instance is running
-            self.logger.warning(f"Error acquiring lock: {e}")
-            return False
+            # In Docker, stale locks are common on restart - just clear and proceed
+            try:
+                self.pid_lock_file.unlink()
+                import os
+                self.pid_lock_file.write_text(str(os.getpid()))
+                return True
+            except:
+                self.logger.warning(f"Error acquiring lock: {e}")
+                return False
 
     def _release_lock(self):
         """Release the PID lock file"""
