@@ -80,7 +80,8 @@ services:
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASS=${SMTP_PASS:-}
       # Optional settings
-      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-14400}
+      # Note: CHECK_INTERVAL_HOURS is read from database settings (set via Web UI)
+      # The start_summarizer.sh script dynamically reads it on each run
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - MAX_PROCESSED_ENTRIES=${MAX_PROCESSED_ENTRIES:-10000}
     networks:

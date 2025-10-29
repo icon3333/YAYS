@@ -8,6 +8,7 @@ FROM python:3.11-slim as base
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    bc \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -26,9 +27,11 @@ FROM base as summarizer
 # Copy application code
 COPY src/ ./src/
 COPY process_videos.py .
+COPY start_summarizer.sh .
 
 # Create necessary directories with correct permissions
 RUN mkdir -p /app/data /app/logs && \
+    chmod +x /app/start_summarizer.sh && \
     chown -R appuser:appuser /app
 
 # Switch to non-root user
@@ -38,8 +41,8 @@ USER appuser
 HEALTHCHECK --interval=5m --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
-# Run summarizer in a loop with configurable interval
-CMD ["sh", "-c", "while true; do python -u process_videos.py; sleep ${CHECK_INTERVAL_SECONDS:-14400}; done"]
+# Run summarizer using startup script that reads interval from database
+CMD ["/app/start_summarizer.sh"]
 
 # Stage 3: Web service
 FROM base as web
