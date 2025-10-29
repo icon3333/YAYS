@@ -610,18 +610,29 @@ class VideoProcessor:
 
                 # Process each video
                 for video in videos:
-                    # Check if video was uploaded before channel was added (skip old videos)
-                    video_upload_date = video.get('published') or video.get('upload_date')
-                    if not self._should_process_video(video_upload_date, channel_added_at):
-                        self.logger.debug(f"   ⏭️  Skipping old video (uploaded before channel was added): {video['title'][:50]}")
-                        continue
-
-                    # Check database status - only process if pending or not in DB
+                    # Check database status first - skip if already processed
                     if self.db.is_processed(video['id']):
                         existing = self.db.get_video_by_id(video['id'])
                         if existing and existing.get('processing_status') not in [STATUS_PENDING, None]:
                             self.logger.debug(f"   Skipping {existing.get('processing_status')}: {video['title'][:40]}")
                             continue
+
+                    # Get upload date - fetch from yt-dlp first if not available
+                    video_upload_date = video.get('published') or video.get('upload_date')
+
+                    # If upload date is missing from initial fetch, get metadata to obtain it
+                    if not video_upload_date:
+                        self.logger.debug(f"   Fetching metadata to determine upload date for: {video['title'][:40]}")
+                        metadata = self.youtube_client.get_video_metadata(video['id'])
+                        if metadata:
+                            video_upload_date = metadata.get('upload_date', '')
+                            # Update video dict with the date for later use
+                            video['published'] = video_upload_date
+
+                    # Check if video was uploaded before channel was added (skip old videos)
+                    if not self._should_process_video(video_upload_date, channel_added_at):
+                        self.logger.info(f"   ⏭️  Skipping old video (uploaded before channel added): {video['title'][:50]}")
+                        continue
 
                     # Process the video
                     self.process_video(video, channel_id, channel_name)

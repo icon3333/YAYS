@@ -2028,10 +2028,10 @@ Transcript: {transcript}`;
                 'sending_email': '📧 Sending email',
                 'processing': '⚙️ Processing video',
                 'success': '✅ Completed',
-                'failed_transcript': '❌ Transcript unavailable',
-                'failed_ai': '❌ AI generation failed',
-                'failed_email': '❌ Email delivery failed',
-                'failed_permanent': '❌ Failed after 3 retries',
+                'failed_transcript': '<i class="iconoir-cancel"></i> Transcript unavailable',
+                'failed_ai': '<i class="iconoir-cancel"></i> AI generation failed',
+                'failed_email': '<i class="iconoir-cancel"></i> Email delivery failed',
+                'failed_permanent': '<i class="iconoir-cancel"></i> Failed after 3 retries',
                 'failed_stopped': '⏹️ Stopped by user'
             };
             return labels[status] || status;
@@ -2057,7 +2057,7 @@ Transcript: {transcript}`;
             if (status === 'success') {
                 // Labels row - only show email label if email was actually sent
                 if (video.email_sent) {
-                    labelsHtml += `<span class="label-status label-email-sent" title="Email sent successfully">📧 Email sent</span>`;
+                    labelsHtml += `<span class="label-status label-email-sent" title="Email sent successfully"><i class="iconoir-send-mail"></i> Email sent</span>`;
                 }
 
                 // Buttons row

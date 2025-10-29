@@ -1405,7 +1405,9 @@ async def process_videos_now():
     try:
         # Run process_videos.py as subprocess (non-blocking)
         # Use sys.executable to ensure we use the same Python interpreter (venv)
-        subprocess.Popen([sys.executable, 'process_videos.py'])
+        # Use absolute path to ensure it works regardless of working directory
+        script_path = Path(__file__).parent.parent.parent / 'process_videos.py'
+        subprocess.Popen([sys.executable, str(script_path)])
         logger.info("Manual processing triggered")
 
         return {

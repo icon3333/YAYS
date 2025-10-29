@@ -47,6 +47,7 @@ FROM base as web
 # Copy application code
 COPY src/ ./src/
 COPY main.py .
+COPY process_videos.py .
 
 # Create necessary directories with correct permissions
 # ⚠️ CRITICAL: Web service needs data/ for database access (settings stored in data/videos.db)

@@ -1327,6 +1327,7 @@ class VideoDatabase:
     def set_channels(self, channels: List[str], channel_names: Dict[str, str] = None) -> bool:
         """
         Replace all channels with new list.
+        Preserves added_at timestamps for existing channels to maintain accurate video filtering.
 
         Args:
             channels: List of channel IDs
@@ -1340,16 +1341,29 @@ class VideoDatabase:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            # Get existing channels with their added_at timestamps
+            cursor.execute("SELECT channel_id, added_at FROM channels")
+            existing_channels = {row[0]: row[1] for row in cursor.fetchall()}
+
             # Clear existing channels
             cursor.execute("DELETE FROM channels")
 
-            # Insert new channels
+            # Insert channels, preserving added_at for existing ones
             for channel_id in channels:
                 channel_name = names.get(channel_id, channel_id)
-                cursor.execute("""
-                    INSERT INTO channels (channel_id, channel_name, enabled)
-                    VALUES (?, ?, 1)
-                """, (channel_id, channel_name))
+
+                # If channel existed before, preserve its added_at timestamp
+                if channel_id in existing_channels:
+                    cursor.execute("""
+                        INSERT INTO channels (channel_id, channel_name, enabled, added_at)
+                        VALUES (?, ?, 1, ?)
+                    """, (channel_id, channel_name, existing_channels[channel_id]))
+                else:
+                    # New channel - use current timestamp
+                    cursor.execute("""
+                        INSERT INTO channels (channel_id, channel_name, enabled)
+                        VALUES (?, ?, 1)
+                    """, (channel_id, channel_name))
 
             conn.commit()
             return True
