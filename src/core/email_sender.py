@@ -9,6 +9,7 @@ import logging
 from time import sleep
 from typing import Dict
 from email.mime.text import MIMEText
+from email.header import Header
 
 
 logger = logging.getLogger(__name__)
@@ -64,16 +65,22 @@ class EmailSender:
             email_body = f"{summary}\n\n---\n🎬 Watch video: {video_url}"
 
         msg = MIMEText(email_body, 'plain', 'utf-8')
-        msg['Subject'] = f"YAYS: {video['title'][:60]}"
+        # Properly encode subject line with UTF-8
+        subject = f"YAYS: {video['title'][:60]}"
+        msg['Subject'] = Header(subject, 'utf-8')
         msg['From'] = self.smtp_user
         msg['To'] = self.target_email
 
         # Try sending with retry
         for attempt in range(self.RETRY_ATTEMPTS):
             try:
+                # Create SMTP connection with UTF-8 support
                 with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as server:
+                    server.ehlo()
                     server.starttls()
+                    server.ehlo()
                     server.login(self.smtp_user, self.smtp_pass)
+                    # Use send_message which properly handles UTF-8
                     server.send_message(msg)
 
                 logger.debug(f"Email sent successfully (attempt {attempt + 1})")
