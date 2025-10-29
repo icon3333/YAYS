@@ -67,6 +67,13 @@
             filter: invert(1) brightness(2);
         }
 
+        /* About Logo */
+        .about-logo {
+            height: 120px;
+            width: auto;
+            filter: invert(1) sepia(0.6) saturate(2) hue-rotate(350deg) brightness(0.8);
+        }
+
         /* Iconoir Icons */
         .iconoir,
         [class*="iconoir-"] {

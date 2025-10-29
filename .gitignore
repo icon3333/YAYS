@@ -14,7 +14,7 @@ config.txt
 
 # AI assistant instructions (not for end users)
 .claude.md
-claude.md
+CLAUDE.md
 
 # ⚠️ CRITICAL: Data and logs - NEVER REMOVE data/ FROM GITIGNORE
 # The data/ directory contains videos.db which must be preserved during updates

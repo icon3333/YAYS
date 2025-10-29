@@ -1,6 +1,6 @@
 # YAYS
 
-**Yet Another YouTube Summarizer**
+**Yet Another YouTube Summarizer** v0.1
 
 AI-powered YouTube summaries delivered to your RSS reader. Self-hosted, privacy-first.
 
@@ -11,15 +11,12 @@ AI-powered YouTube summaries delivered to your RSS reader. Self-hosted, privacy-
 Monitor YouTube channels → Extract transcripts → Generate AI summaries → Email to your inbox or RSS reader
 
 **Features:**
-- 🤖 AI summaries using OpenAI (GPT-4o, GPT-4o-mini, o1-mini)
+- 🤖 AI summaries using OpenAI (all current models supported)
 - 📧 Email delivery to inbox or RSS reader (Inoreader, The Old Reader, etc.)
 - 📱 Web UI - Mobile-first interface
-- 🔄 Auto-processing every 4 hours
+- 🔄 Auto-processing (configurable 1-24 hours)
 - 💾 Import/Export - Backup your data
 - 🚀 One-command install and update
-
-**Cost:** ~$1-2/month for typical usage
-**Setup:** One command. 2 minutes.
 
 ---
 
@@ -33,8 +30,6 @@ docker compose up -d
 
 **Then open:** http://localhost:8015 and configure in the Settings tab.
 
-**Time:** 2 minutes
-
 ---
 
 ## Update
@@ -44,11 +39,7 @@ cd ~/YAYS
 ./update.sh
 ```
 
-That's it. The script handles everything:
-- Pulls latest code
-- Rebuilds containers
-- Restarts services
-- No manual steps needed
+The script handles everything: pulls code, rebuilds containers, restarts services.
 
 ---
 
@@ -63,41 +54,53 @@ That's it. The script handles everything:
 
 ## Usage
 
-### Add Your First Channel
+### 1. Add Your First Channel
 
 1. Open http://localhost:8015
-2. Go to Settings tab
-3. Configure API credentials
-4. Paste YouTube channel URL
-5. Click "Add Channel"
+2. Go to **Settings** tab
+3. Configure API credentials (OpenAI, SMTP)
+4. Paste YouTube channel URL in the input field
+5. Click **Add Channel**
 
 **Test channel:** `UCddiUEpeqJcYeBxX1IVBKvQ` (The Verge)
 
-### Transcript Configuration
+### 2. Configure Transcript Extraction
 
-YAYS now supports two transcript providers:
+YAYS uses a **4-method cascade** for maximum reliability:
 
-#### Option 1: Supadata.ai (Recommended)
-- **Reliability:** Better handling of rate limits and IP blocks
-- **Setup:** Get API key from [supadata.ai](https://supadata.ai)
-- **Cost:** 100 free credits/month, Pro: $29/mo for 10K credits
+1. **YouTube Transcript API** (free, fast)
+2. **yt-dlp Subtitles** (free, more reliable)
+3. **Direct Timedtext API** (free, scraping fallback)
+4. **Supadata.ai Fallback** (paid, optional)
 
-**How to enable:**
-1. Go to Settings → Transcript Settings
-2. Select "Supadata.ai (Recommended)" as provider
-3. Enter your API key
-4. Save settings
+**Default:** First 3 methods are active automatically.
 
-#### Option 2: Legacy (youtube-transcript-api)
-- **Cost:** Free
-- **Reliability:** Subject to YouTube rate limiting (~20% failure rate)
-- **Default:** Already configured
+**To enable Supadata fallback:**
+1. Get API key from [supadata.ai](https://supadata.ai) (100 free credits, then $29/mo)
+2. Go to Settings → Transcript Settings
+3. Check "Activate Supadata Fallback"
+4. Enter your API key
+5. Save settings
 
-**Note:** Supadata offers significantly better reliability and is recommended for production use.
+### 3. Configure Processing Schedule
 
-### Manual Processing
+1. Go to **Settings** tab
+2. Find **Check Interval** (default: 4 hours)
+3. Adjust from 1-24 hours based on your needs
+4. Changes take effect on next processing run
 
-Don't wait for the 4-hour interval:
+### 4. Add Single Videos Manually
+
+Don't want to monitor a whole channel? Add individual videos:
+
+1. Go to **Feed** tab
+2. Click **Quick Add Video**
+3. Paste YouTube video URL
+4. Video processes immediately
+
+### 5. Trigger Manual Processing
+
+Don't wait for the scheduled interval:
 
 ```bash
 docker exec youtube-summarizer python process_videos.py
@@ -106,137 +109,6 @@ docker exec youtube-summarizer python process_videos.py
 Watch logs:
 ```bash
 docker compose logs -f
-```
-
----
-
-## Common Commands
-
-```bash
-# View logs
-docker compose logs -f
-
-# Restart (does NOT reload code, use ./update.sh instead)
-docker compose restart
-
-# Manual processing
-docker exec youtube-summarizer python process_videos.py
-
-# Check status
-docker compose ps
-
-# Stop
-docker compose down
-```
-
----
-
-## Troubleshooting
-
-### Containers Not Starting
-
-```bash
-cd ~/YAYS
-./update.sh
-```
-
-### Port 8015 Already In Use
-
-Edit `docker-compose.yml` line 17:
-```yaml
-ports:
-  - "8080:8000"  # Change 8015 to your preferred port
-```
-
-Then:
-```bash
-docker compose down
-docker compose up -d
-```
-
-### Check Logs for Errors
-
-```bash
-docker compose logs web
-docker compose logs summarizer
-```
-
----
-
-## Cost Analysis
-
-**OpenAI Pricing:**
-
-| Model | Per Video | Use Case |
-|-------|-----------|----------|
-| GPT-4o-mini | ~$0.001 | Cheapest, fast, good enough |
-| GPT-4o | ~$0.015 | Better quality, 15x more expensive |
-| o1-mini | ~$0.018 | Reasoning model, probably overkill |
-
-**Monthly estimates (GPT-4o-mini):**
-- 10 videos/day: ~$0.30
-- 30 videos/day: ~$0.90
-- 100 videos/day: ~$3.00
-
----
-
-## Advanced
-
-### Backup & Restore
-
-Use the web UI Settings tab - has built-in backup/restore functionality.
-
-### Cloud Deployment
-
-Works on any server with Docker:
-- AWS EC2
-- DigitalOcean Droplet
-- Raspberry Pi
-- Home server
-
-Just run the install command and access via Tailscale.
-
-### Development
-
-```bash
-git clone https://github.com/icon3333/YAYS.git
-cd YAYS
-./deploy.sh  # Interactive setup for local development
-```
-
----
-
-## FAQ
-
-**Q: Why email instead of direct RSS API?**
-A: SMTP has worked since 1982. No OAuth, no webhooks, no PhD required.
-
-**Q: Which OpenAI model?**
-A: GPT-4o-mini for most people (fast, cheap, good).
-
-**Q: Can I use without Docker?**
-A: Yes, run `./deploy.sh` for local development. Docker is easier though.
-
-**Q: What if transcript unavailable?**
-A: Video gets skipped. Not all creators enable transcripts.
-
-**Q: Remote access without port forwarding?**
-A: Tailscale. Free, secure, zero-config VPN.
-
----
-
-## Project Structure
-
-```
-YAYS/
-├── src/                 # Python codebase
-├── install.sh           # One-line installer
-├── update.sh           # One-command updater
-├── deploy.sh           # Local development setup
-├── docker-compose.yml  # Container orchestration
-├── config.txt          # Channels & settings (auto-created)
-├── data/               # Database & state
-└── logs/               # Application logs
 ```
 
 ---
@@ -251,14 +123,16 @@ MIT License - See [LICENSE](LICENSE) file.
 
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Web framework
-- [OpenAI Python SDK](https://github.com/openai/openai-python) - API client
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Channel discovery & metadata enrichment
-- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) - Transcript extraction (legacy)
-- [Supadata.ai](https://supadata.ai) - Managed transcript API service (optional)
+- [OpenAI Python SDK](https://github.com/openai/openai-python) - GPT API client
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - YouTube channel discovery & metadata
+- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) - Primary transcript extraction
+- [Supadata.ai](https://supadata.ai) - Optional managed transcript fallback
+- [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) - Timedtext API parsing
+- [cryptography](https://cryptography.io/) - Settings encryption
 - [Docker](https://www.docker.com/) - Containerization
 
 ---
 
 **Built for self-hosters who value privacy, control, and efficiency.**
 
-For issues or contributions, open a GitHub issue.
+For issues or contributions, open a GitHub issue at [github.com/icon3333/YAYS](https://github.com/icon3333/YAYS).
