@@ -1692,7 +1692,10 @@
                 const requestBody = {};
                 if (targetEmail) requestBody.target_email = targetEmail;
                 if (smtpUser) requestBody.smtp_user = smtpUser;
-                if (smtpPass) requestBody.smtp_pass = smtpPass;
+                // Only send password if it's not masked (dots) - let backend use saved value
+                if (smtpPass && !smtpPass.includes('•')) {
+                    requestBody.smtp_pass = smtpPass;
+                }
 
                 const response = await fetch('/api/settings/send-test-email', {
                     method: 'POST',
