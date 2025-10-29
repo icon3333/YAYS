@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 from src.utils.formatters import format_duration, format_views, format_upload_date, format_processed_date
-from src.utils.encryption import get_encryption
 
 
 class VideoDatabase:
@@ -39,20 +38,6 @@ class VideoDatabase:
             raise e
         finally:
             conn.close()
-
-    def _encrypt_value(self, value: str) -> str:
-        """Encrypt a value using Fernet encryption"""
-        if not value:
-            return ''
-        enc = get_encryption()
-        return enc.encrypt(value)
-
-    def _decrypt_value(self, value: str) -> str:
-        """Decrypt a value using Fernet encryption"""
-        if not value:
-            return ''
-        enc = get_encryption()
-        return enc.decrypt(value)
 
     def _video_row_to_dict(self, row: sqlite3.Row, include_summary: bool = True) -> Dict[str, Any]:
         """
@@ -145,6 +130,7 @@ class VideoDatabase:
         self._ensure_settings_table()
         self._ensure_channels_table()
         self._ensure_transcript_cache_table()
+        self._migrate_decrypt_settings()  # Migrate from encrypted to plain text storage
 
     def _migrate_add_source_type(self):
         """
@@ -243,14 +229,91 @@ class VideoDatabase:
 
                 conn.commit()
 
+    def _migrate_decrypt_settings(self):
+        """
+        Migration: Decrypt all encrypted settings and store as plain text.
+
+        This migration handles the transition from encrypted to plain text storage:
+        1. Finds all settings with encrypted=1
+        2. Attempts to decrypt the values if encryption module available
+        3. Updates to plain text with encrypted=0
+
+        Safe to run multiple times - idempotent.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if settings table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+            if not cursor.fetchone():
+                return  # Settings table doesn't exist yet, nothing to migrate
+
+            # Find all encrypted settings
+            cursor.execute("SELECT key, value FROM settings WHERE encrypted = 1")
+            encrypted_settings = cursor.fetchall()
+
+            if not encrypted_settings:
+                return  # No encrypted settings to migrate
+
+            # Try to import encryption module (may not be available)
+            encryption_available = False
+            try:
+                from src.utils.encryption import get_encryption
+                enc = get_encryption()
+                encryption_available = True
+            except (ImportError, Exception):
+                print("⚠️ Encryption module not available - encrypted settings will be cleared")
+
+            # Decrypt each setting
+            migrated_count = 0
+            cleared_count = 0
+
+            for key, encrypted_value in encrypted_settings:
+                if not encrypted_value:
+                    # Empty value, just update flag
+                    cursor.execute("""
+                        UPDATE settings
+                        SET encrypted = 0
+                        WHERE key = ?
+                    """, (key,))
+                    continue
+
+                plain_value = None
+
+                # Try to decrypt if value looks encrypted (Fernet tokens start with 'gAAAAA')
+                if encryption_available and encrypted_value.startswith('gAAAAA'):
+                    try:
+                        plain_value = enc.decrypt(encrypted_value)
+                        migrated_count += 1
+                    except Exception as e:
+                        print(f"⚠️ Could not decrypt '{key}': {e}")
+                        plain_value = ''  # Clear the value
+                        cleared_count += 1
+                else:
+                    # Not encrypted format or no encryption module - treat as plain text
+                    plain_value = encrypted_value
+                    migrated_count += 1
+
+                # Update with plain text value and encrypted=0
+                cursor.execute("""
+                    UPDATE settings
+                    SET value = ?, encrypted = 0
+                    WHERE key = ?
+                """, (plain_value, key))
+
+            conn.commit()
+
+            if migrated_count > 0:
+                print(f"✅ Migrated {migrated_count} encrypted settings to plain text")
+            if cleared_count > 0:
+                print(f"⚠️ Cleared {cleared_count} settings that could not be decrypted (please re-enter via Web UI)")
+
     def _ensure_settings_table(self):
         """
         Ensure settings table exists for database-backed configuration.
 
         Creates a settings table to store ALL application settings
-        in the database, including encrypted secrets.
-
-        Secrets are encrypted at rest using Fernet symmetric encryption.
+        in the database, including secrets (stored as plain text).
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -282,9 +345,10 @@ class VideoDatabase:
             cursor.execute("SELECT COUNT(*) FROM settings")
             if cursor.fetchone()[0] == 0:
                 # Note: Secrets start empty, users must configure them via web UI
+                # Encryption disabled (encrypted=0) for all settings - plain text storage
                 default_settings = [
-                    ('OPENAI_API_KEY', '', 'secret', 1, 'OpenAI API Key (encrypted)'),
-                    ('SMTP_PASS', '', 'secret', 1, 'Gmail app password (encrypted)'),
+                    ('OPENAI_API_KEY', '', 'secret', 0, 'OpenAI API Key (plain text)'),
+                    ('SMTP_PASS', '', 'secret', 0, 'Gmail app password (plain text)'),
                     ('TARGET_EMAIL', '', 'email', 0, 'Email address for receiving summaries'),
                     ('SMTP_USER', '', 'email', 0, 'Gmail SMTP username'),
                     ('LOG_LEVEL', 'INFO', 'enum', 0, 'Logging verbosity level'),
@@ -322,6 +386,7 @@ class VideoDatabase:
             """)
 
             # Add config settings to settings table
+            # Encryption disabled (encrypted=0) - all settings stored as plain text
             cursor.execute("""
                 INSERT OR IGNORE INTO settings (key, value, type, encrypted, description)
                 VALUES
@@ -331,7 +396,7 @@ class VideoDatabase:
                     ('CHECK_INTERVAL_MINUTES', '60', 'integer', 0, 'How often to check for new videos (minutes)'),
                     ('MAX_FEED_ENTRIES', '20', 'integer', 0, 'Maximum feed entries to process'),
                     ('ENABLE_SUPADATA_FALLBACK', 'false', 'enum', 0, 'Enable Supadata.ai as fallback method (paid)'),
-                    ('SUPADATA_API_KEY', '', 'secret', 1, 'Supadata.ai API key (encrypted)')
+                    ('SUPADATA_API_KEY', '', 'secret', 0, 'Supadata.ai API key (plain text)')
             """)
 
             conn.commit()
@@ -1028,31 +1093,28 @@ class VideoDatabase:
     def get_setting(self, key: str) -> Optional[str]:
         """
         Get a single setting value from database.
-        Automatically decrypts if value is encrypted.
+        All values stored as plain text.
 
         Args:
             key: Setting key
 
         Returns:
-            Decrypted setting value or None if not found
+            Setting value or None if not found
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
             row = cursor.fetchone()
 
             if not row:
                 return None
 
-            value, encrypted = row[0], row[1]
-
-            # Decrypt if needed using helper method
-            return self._decrypt_value(value) if encrypted else value
+            return row[0]
 
     def get_all_settings(self) -> Dict[str, Dict[str, str]]:
         """
         Get all settings from database.
-        Automatically decrypts encrypted values.
+        All values stored as plain text.
 
         Returns:
             Dict mapping setting key to {value, type, description, encrypted}
@@ -1069,14 +1131,11 @@ class VideoDatabase:
             for row in cursor.fetchall():
                 key, value, type_, encrypted, description = row
 
-                # Decrypt if needed using helper method
-                decrypted_value = self._decrypt_value(value) if encrypted else value
-
                 settings[key] = {
-                    'value': decrypted_value,
+                    'value': value,
                     'type': type_,
                     'description': description or '',
-                    'encrypted': bool(encrypted)
+                    'encrypted': bool(encrypted)  # Legacy field, always False
                 }
 
             return settings
@@ -1084,12 +1143,12 @@ class VideoDatabase:
     def set_setting(self, key: str, value: str, encrypt: Optional[bool] = None) -> bool:
         """
         Set a single setting value in database.
-        Automatically encrypts if setting is marked as secret.
+        All values stored as plain text.
 
         Args:
             key: Setting key
-            value: Setting value (plaintext)
-            encrypt: Force encryption (None = auto-detect based on existing setting)
+            value: Setting value (plain text)
+            encrypt: Deprecated parameter, ignored (kept for backward compatibility)
 
         Returns:
             True if successful
@@ -1097,23 +1156,15 @@ class VideoDatabase:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Check if setting exists and should be encrypted
-            cursor.execute("SELECT encrypted FROM settings WHERE key = ?", (key,))
-            row = cursor.fetchone()
-
-            should_encrypt = encrypt if encrypt is not None else (row[0] if row else False)
-
-            # Encrypt if needed using helper method
-            final_value = self._encrypt_value(value) if should_encrypt else value
-
+            # Store as plain text (encrypted always = 0)
             cursor.execute("""
                 INSERT INTO settings (key, value, type, encrypted, description, updated_at)
-                VALUES (?, ?, 'text', ?, '', CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'text', 0, '', CURRENT_TIMESTAMP)
                 ON CONFLICT(key) DO UPDATE SET
                     value = excluded.value,
-                    encrypted = excluded.encrypted,
+                    encrypted = 0,
                     updated_at = CURRENT_TIMESTAMP
-            """, (key, final_value, int(should_encrypt)))
+            """, (key, value))
 
             conn.commit()
             return True
@@ -1121,11 +1172,11 @@ class VideoDatabase:
     def set_multiple_settings(self, settings: Dict[str, str], encrypt_keys: Optional[set] = None) -> int:
         """
         Set multiple settings at once.
-        Automatically encrypts values marked as secrets.
+        All values stored as plain text.
 
         Args:
-            settings: Dict mapping setting key to value (plaintext)
-            encrypt_keys: Set of keys to encrypt (None = auto-detect)
+            settings: Dict mapping setting key to value (plain text)
+            encrypt_keys: Deprecated parameter, ignored (kept for backward compatibility)
 
         Returns:
             Number of settings updated
@@ -1135,29 +1186,16 @@ class VideoDatabase:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Get existing encryption flags
-            cursor.execute("SELECT key, encrypted FROM settings")
-            existing_encryption = {row[0]: bool(row[1]) for row in cursor.fetchall()}
-
             for key, value in settings.items():
-                # Determine if should encrypt
-                should_encrypt = False
-                if encrypt_keys and key in encrypt_keys:
-                    should_encrypt = True
-                elif key in existing_encryption:
-                    should_encrypt = existing_encryption[key]
-
-                # Encrypt if needed using helper method
-                final_value = self._encrypt_value(value) if should_encrypt else value
-
+                # Store as plain text (encrypted always = 0)
                 cursor.execute("""
                     INSERT INTO settings (key, value, type, encrypted, description, updated_at)
-                    VALUES (?, ?, 'text', ?, '', CURRENT_TIMESTAMP)
+                    VALUES (?, ?, 'text', 0, '', CURRENT_TIMESTAMP)
                     ON CONFLICT(key) DO UPDATE SET
                         value = excluded.value,
-                        encrypted = excluded.encrypted,
+                        encrypted = 0,
                         updated_at = CURRENT_TIMESTAMP
-                """, (key, final_value, int(should_encrypt)))
+                """, (key, value))
                 updated_count += 1
 
             conn.commit()

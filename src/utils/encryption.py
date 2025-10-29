@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 Encryption utilities for secure settings storage
-Uses Fernet symmetric encryption for secrets in database
+
+⚠️ DEPRECATED: This module is deprecated and kept only for migrating
+old encrypted settings to plain text. New installations store all
+settings as plain text in the database.
+
+This module is only used during the one-time migration from encrypted
+to plain text storage. After migration completes, this module is not
+imported or used by the application.
 """
 
 import os

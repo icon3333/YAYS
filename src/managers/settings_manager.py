@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Settings Manager - Database-backed settings with encryption
+Settings Manager - Database-backed settings (plain text storage)
 Thin wrapper around VideoDatabase for settings operations
 """
 
@@ -12,13 +12,14 @@ from src.utils.validators import is_valid_email, is_valid_openai_key
 
 class SettingsManager:
     """
-    Database-backed settings manager with encryption.
+    Database-backed settings manager.
 
-    ALL settings stored in database:
-    - Secrets (API keys, passwords) are encrypted at rest
-    - Non-secrets (emails, config) stored in plaintext
+    ALL settings stored in database as plain text:
+    - Secrets (API keys, passwords) stored as plain text
+    - Non-secrets (emails, config) stored as plain text
     - All operations delegate to VideoDatabase
     - No file operations!
+    - Designed for single-user homeserver setups
     """
 
     def __init__(self, env_path='.env', db_path='data/videos.db', lock_timeout=10):
@@ -36,7 +37,7 @@ class SettingsManager:
 
         # Define settings schema for validation
         self.env_schema = {
-            # Secrets (encrypted in database)
+            # Secrets (stored as plain text in database)
             'OPENAI_API_KEY': {
                 'type': 'secret',
                 'required': True,
@@ -333,7 +334,7 @@ class SettingsManager:
 
         Args:
             key: Setting key
-            value: Setting value (plaintext, will be encrypted if needed)
+            value: Setting value (stored as plain text)
 
         Returns:
             Tuple of (success, message)
@@ -351,7 +352,7 @@ class SettingsManager:
             value = value.replace(' ', '')
 
         try:
-            # Update in database (encryption handled automatically)
+            # Update in database (stored as plain text)
             self.db.set_setting(key, value)
             return True, f"Updated {key} successfully"
 
@@ -363,7 +364,7 @@ class SettingsManager:
         Update multiple settings at once.
 
         Args:
-            settings: Dict mapping setting key to value (plaintext)
+            settings: Dict mapping setting key to value (stored as plain text)
 
         Returns:
             Tuple of (success, message, list of errors)
@@ -395,7 +396,7 @@ class SettingsManager:
             if not non_empty_settings:
                 return True, "No settings to update", []
 
-            # Update all settings in database (encryption handled automatically)
+            # Update all settings in database (stored as plain text)
             updated_count = self.db.set_multiple_settings(non_empty_settings)
 
             return True, f"Updated {updated_count} settings successfully", []

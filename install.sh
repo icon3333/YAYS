@@ -154,20 +154,15 @@ clone_or_update_repository() {
         # 2. Docker bind mounts preserve data across container rebuilds
         # DO NOT add any commands that delete or modify data/ directory
 
-        # ⚠️ CRITICAL: .env file preservation
-        # The .env file contains YAYS_MASTER_KEY which is used to encrypt/decrypt
-        # API keys and passwords in the database. If this key changes, all encrypted
-        # credentials become unreadable and must be re-entered.
-        # Backup .env before git operations to ensure it's never lost.
+        # ⚠️ .env file preservation (optional)
+        # The .env file contains configuration settings. It's preserved during updates
+        # for convenience, though settings are now stored in the database.
+        # YAYS_MASTER_KEY (if present) is only used for one-time migration of old encrypted settings.
         if [ -f ".env" ]; then
             print_info "Backing up .env file..."
             cp .env .env.backup.tmp
-
-            # Extract current YAYS_MASTER_KEY for validation
-            CURRENT_KEY=$(grep "^YAYS_MASTER_KEY=" .env 2>/dev/null | cut -d= -f2)
         else
             print_warning ".env file not found - will be created from example"
-            CURRENT_KEY=""
         fi
 
         print_info "Pulling latest changes from GitHub..."
