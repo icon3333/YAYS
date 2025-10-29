@@ -56,7 +56,7 @@ from src.core.youtube import YouTubeClient
 
 app = FastAPI(
     title="YAYS - Yet Another Youtube Summarizer",
-    version="2.0.0",
+    version="0.1",
     description="Modern minimalist design"
 )
 
@@ -235,7 +235,7 @@ async def health_check():
     """Health check endpoint"""
     try:
         config_manager.ensure_config_exists()
-        return {"status": "healthy", "version": "2.0.0"}
+        return {"status": "healthy", "version": "0.1"}
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return JSONResponse(
