@@ -154,9 +154,42 @@ clone_or_update_repository() {
         # 2. Docker bind mounts preserve data across container rebuilds
         # DO NOT add any commands that delete or modify data/ directory
 
+        # ⚠️ CRITICAL: .env file preservation
+        # The .env file contains YAYS_MASTER_KEY which is used to encrypt/decrypt
+        # API keys and passwords in the database. If this key changes, all encrypted
+        # credentials become unreadable and must be re-entered.
+        # Backup .env before git operations to ensure it's never lost.
+        if [ -f ".env" ]; then
+            print_info "Backing up .env file..."
+            cp .env .env.backup.tmp
+
+            # Extract current YAYS_MASTER_KEY for validation
+            CURRENT_KEY=$(grep "^YAYS_MASTER_KEY=" .env 2>/dev/null | cut -d= -f2)
+        else
+            print_warning ".env file not found - will be created from example"
+            CURRENT_KEY=""
+        fi
+
         print_info "Pulling latest changes from GitHub..."
         git fetch origin
         git reset --hard origin/main
+
+        # Restore .env file after git operations
+        if [ -f ".env.backup.tmp" ]; then
+            print_info "Restoring .env file..."
+            mv .env.backup.tmp .env
+
+            # Create timestamped permanent backup of .env for safety
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            cp .env "data/.env.backup.$TIMESTAMP"
+            print_success ".env file preserved with your credentials"
+            print_info "Permanent backup saved to: data/.env.backup.$TIMESTAMP"
+        elif [ -f ".env.example" ] && [ ! -f ".env" ]; then
+            # Only create from example if no .env exists and no backup was found
+            print_info "Creating .env from example..."
+            cp .env.example .env
+            print_warning "Please configure credentials in .env or via Web UI Settings"
+        fi
 
         echo ""
         print_info "Updated to:"

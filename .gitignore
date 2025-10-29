@@ -5,6 +5,7 @@
 .env
 *.env
 !.env.example
+.env.backup.*
 
 # Configuration (contains personal channel list)
 config.txt
