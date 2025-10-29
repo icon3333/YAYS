@@ -11,6 +11,10 @@ from datetime import datetime, timedelta
 from time import sleep, time
 from typing import Dict, List, Optional
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import core modules
 from src.core.youtube import YouTubeClient
